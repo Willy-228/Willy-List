@@ -1,0 +1,2176 @@
+import React, { useState, useEffect, useMemo } from 'react';
+ 
+import wattpadLogo from './assets/wattpad.png'; 
+import codeIcon from './assets/code.png'; 
+import anilistIcon from './assets/anilist.svg'; 
+import developerIcon from './assets/developer.png'; 
+import notionIcon from './assets/notion-icon.svg'; 
+import sparkleIcon from './assets/sparkle.png'; 
+import anilistLogoWhite from './assets/AniList_logo white.svg'; 
+import anilistLogo from './assets/AniList_logo.svg.png';
+import keyframeIcon from './assets/keyframe.png';
+import userIcon from './assets/user.png';
+ 
+const LIST_STATUS = {
+  WATCHING: 'watching',    
+  PLANNED: 'planned',      
+  COMPLETED: 'completed'   
+};
+ 
+const globalApiCache = new Map();
+let homeSeasonCache = null;
+ 
+const GENRE_MAP = {
+  'All': '', 'Action': '動作', 'Adventure': '冒險', 'Comedy': '喜劇', 
+  'Drama': '劇情', 'Fantasy': '奇幻', 'Romance': '戀愛', 'Sci-Fi': '科幻', 
+  'Slice of Life': '日常', 'Sports': '運動', 'Supernatural': '超自然', 
+  'Mystery': '懸疑', 'Mecha': '機甲', 'Suspense': '懸疑', 'Ecchi': '微色情',
+  'Horror': '恐怖', 'Psychological': '心理', 'Isekai': '異世界',
+  'Music': '音樂', 'Historical': '歷史', 'School': '校園',
+  'Harem': '後宮', 'Iyashikei': '治癒', 'Award Winning': '得獎',
+  'Gourmet': '美食', 'Workplace': '職場', 'Time Travel': '時空',
+  'Reincarnation': '轉生', 'Detective': '推理',
+  'Military': '軍事', 'Super Power': '超能力', 'Avant Garde': '前衛',
+  'Mythology': '神話', 'Strategy Game': '策略遊戲', 'Martial Arts': '武術',
+  'Parody': '惡搞', 'Samurai': '武士', 'Shoujo': '少女', 'Shounen': '少年',
+  'Space': '太空', 'Seinen': '青年', 'Josei': '女性', 'Combat Sports': '格鬥運動',
+  'Gore': '血腥', 'Love Polygon': '多角戀', 'Pets': '寵物', 'Reverse Harem': '逆後宮',
+  'Romantic Subtext': '戀愛暗示', 'Survival': '生存',
+  'Team Sports': '團隊運動', 'Video Game': '電子遊戲', 'Visual Gag': '視覺搞笑',
+  'Crossdressing': '偽娘/男裝', 'Boys Love': 'BL', 'Girls Love': '百合',
+  'Mahou Shoujo': '魔法少女', 'Idol': '偶像', 'CGDCT': '萌系', 'Thriller': '驚悚'
+};
+ 
+const UI_GENRES = ['All', 'Action', 'Adventure', 'Comedy', 'Drama', 'Ecchi', 'Fantasy', 'Horror', 'Mahou Shoujo', 'Mecha', 'Music', 'Mystery', 'Psychological', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports', 'Supernatural', 'Thriller'];
+const UI_YEARS = ['All', ...Array.from({length: 26}, (_, i) => (2026 - i).toString()), '2000以前'];
+const UI_SEASONS = ['All', 'Winter', 'Spring', 'Summer', 'Fall'];
+ 
+const translateGenre = (enGenre) => GENRE_MAP[enGenre] || enGenre;
+ 
+const fetchAniList = async (query, variables = {}, retries = 3, delay = 1000) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ query, variables })
+      });
+      
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After');
+        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : delay * Math.pow(1.5, i);
+        await new Promise(r => setTimeout(r, waitTime));
+        continue;
+      }
+      
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        throw new Error(`Client Error: ${response.status}`);
+      }
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const json = await response.json();
+      if (json.errors) throw new Error(json.errors[0].message);
+      return json.data;
+    } catch (error) {
+      if (error.message.includes('Client Error')) throw error; 
+      if (i === retries - 1) throw error;
+      await new Promise(r => setTimeout(r, delay * Math.pow(1.5, i)));
+    }
+  }
+  throw new Error("API Fetch Failed");
+};
+ 
+const formatAnilistAnime = (media) => {
+  if (!media) return null;
+ 
+  const isAdultContent = media.isAdult || (media.genres && media.genres.includes('Hentai'));
+  let bDayIndex = 7; 
+  
+  const forceToOther = 
+    isAdultContent ||
+    media.status === 'FINISHED' || 
+    ['MUSIC', 'SPECIAL', 'TV_SHORT', 'OVA', 'MOVIE'].includes(media.format);
+ 
+  if (forceToOther) {
+    bDayIndex = 7;
+  } else if (media.nextAiringEpisode?.airingAt) {
+    const jstDate = new Date((media.nextAiringEpisode.airingAt + 32400) * 1000);
+    const jsDay = jstDate.getUTCDay(); 
+    bDayIndex = jsDay === 0 ? 6 : jsDay - 1; 
+  } else if (media.status === 'RELEASING') {
+    bDayIndex = 7;
+  }
+ 
+  const formattedScore = media.meanScore ? (media.meanScore / 10).toFixed(1) : 'N/A';
+  
+  let mapStatus = 'Unknown';
+  if (media.status === 'RELEASING') mapStatus = 'Currently Airing';
+  else if (media.status === 'FINISHED') mapStatus = 'Finished Airing';
+  else if (media.status === 'NOT_YET_RELEASED') mapStatus = 'Upcoming';
+ 
+  const cleanSynopsis = media.description?.replace(/<[^>]*>?/gm, '') || '暫無劇情簡介。';
+  
+  let airDateStr = '';
+  if (media.startDate?.year) {
+      airDateStr = `${media.startDate.year}-${String(media.startDate.month || 1).padStart(2,'0')}-${String(media.startDate.day || 1).padStart(2,'0')}`;
+  }
+  const seasonStr = media.season ? media.season.charAt(0).toUpperCase() + media.season.slice(1).toLowerCase() : '';
+ 
+  let mappedFormat = media.format || 'TV';
+  if (mappedFormat === 'TV_SHORT') mappedFormat = 'TV Short';
+  else if (mappedFormat === 'SPECIAL') mappedFormat = 'Special';
+  else if (mappedFormat === 'MUSIC') mappedFormat = 'Music';
+ 
+  return {
+    id: media.id,
+    title: media.title.native || media.title.romaji || media.title.english,
+    originalName: media.title.english || media.title.romaji,
+    imageUrl: media.coverImage?.extraLarge || media.coverImage?.large || media.coverImage?.medium || '',
+    score: formattedScore,
+    users: media.popularity || 0,
+    rank: '--', 
+    eps: media.episodes || null,
+    status: mapStatus,
+    format: mappedFormat,
+    tags: media.genres || [],
+    year: media.seasonYear || media.startDate?.year || '',
+    season: seasonStr,
+    broadcastDayIndex: bDayIndex,
+    synopsis: cleanSynopsis,
+    airDateStr: airDateStr,
+    isAdultContent: isAdultContent,
+    nextAiringAt: media.nextAiringEpisode?.airingAt || null,
+    airingEpisode: media.nextAiringEpisode?.episode ? media.nextAiringEpisode.episode - 1 : null,
+  };
+};
+ 
+export default function App() {
+  const [theme, setTheme] = useState(() => {
+    try {
+      const savedTheme = localStorage.getItem('app-theme');
+      if (savedTheme) return savedTheme;
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } catch (e) {
+      return 'light';
+    }
+  });
+ 
+  useEffect(() => {
+    document.title = 'Willy-List';
+    let link = document.querySelector("link[rel~='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = './assets/wattpad.png';
+  }, []);
+ 
+  useEffect(() => {
+    try {
+      localStorage.setItem('app-theme', theme);
+    } catch (e) {}
+  }, [theme]);
+ 
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = (e) => {
+      setTheme(e.matches ? 'dark' : 'light');
+    };
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+  }, []);
+ 
+  const [currentPage, _setCurrentPage] = useState(() => {
+    try {
+      const hash = window.location.hash.replace('#', '');
+      return ['home', 'anime', 'profile', 'calendar'].includes(hash) ? hash : 'home';
+    } catch (e) {
+      return 'home';
+    }
+  });
+  
+  const setCurrentPage = (page) => {
+    _setCurrentPage(page);
+    try {
+      window.history.pushState({ page }, '', `#${page}`);
+    } catch (e) {
+    }
+  };
+ 
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [searchHistory, setSearchHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('explore-search-history') || '[]'); } catch { return []; }
+  });
+  const [showSearchDrop, setShowSearchDrop] = useState(false);
+  const searchInputRef = React.useRef(null);
+  const searchDropRef = React.useRef(null);
+
+  const addToHistory = (q) => {
+    if (!q.trim()) return;
+    setSearchHistory(prev => {
+      const next = [q.trim(), ...prev.filter(h => h !== q.trim())].slice(0, 16);
+      try { localStorage.setItem('explore-search-history', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  const removeHistory = (item, e) => {
+    e.stopPropagation();
+    setSearchHistory(prev => {
+      const next = prev.filter(h => h !== item);
+      try { localStorage.setItem('explore-search-history', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  const clearHistory = (e) => {
+    e.stopPropagation();
+    setSearchHistory([]);
+    try { localStorage.removeItem('explore-search-history'); } catch {}
+  };
+
+  // debounce 記錄
+  const searchDebounceRef = React.useRef(null);
+  const handleSearchChange = (val) => {
+    setSearchQuery(val);
+    if (val && currentPage === 'home') setCurrentPage('anime');
+    clearTimeout(searchDebounceRef.current);
+    if (val.trim()) {
+      searchDebounceRef.current = setTimeout(() => addToHistory(val.trim()), 800);
+    }
+  };
+
+  // 點擊外部關閉下拉
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (searchDropRef.current && !searchDropRef.current.contains(e.target) &&
+          searchInputRef.current && !searchInputRef.current.contains(e.target)) {
+        setShowSearchDrop(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+  const [allSeasonAnime, setAllSeasonAnime] = useState([]);
+  const [currentSeasonInfo, setCurrentSeasonInfo] = useState({});
+  const [isHomeLoading, setIsHomeLoading] = useState(true);
+  const [toast, setToast] = useState(null);
+  
+  // ── 帳號系統 ──────────────────────────────────────────────────────────
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { return localStorage.getItem('app-current-user') || null; } catch { return null; }
+  });
+  const [showAuth, setShowAuth] = useState(false);
+  const getPlaylistKey = (username) => `animePlaylist-${username}`;
+
+  const [myPlaylist, setMyPlaylist] = useState(() => {
+    try {
+      const user = localStorage.getItem('app-current-user');
+      if (!user) return [];
+      const saved = localStorage.getItem(`animePlaylist-${user}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+ 
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalData, setModalData] = useState(null);
+  const [isModalLoading, setIsModalLoading] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+ 
+  useEffect(() => {
+    try {
+      if (!window.location.hash) {
+        window.history.replaceState({ page: 'home' }, '', '#home');
+      }
+    } catch (e) {}
+ 
+    const handlePopState = (e) => {
+      try {
+        setIsModalOpen(false); 
+        if (e.state && e.state.page) {
+          if (['home', 'anime', 'profile', 'calendar'].includes(e.state.page)) {
+            _setCurrentPage(e.state.page);
+            return;
+          }
+        }
+        const hash = window.location.hash.replace('#', '');
+        if (['home', 'anime', 'profile', 'calendar'].includes(hash)) {
+          _setCurrentPage(hash);
+        }
+      } catch (error) {}
+    };
+ 
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+ 
+  useEffect(() => {
+    if (currentUser) {
+      try {
+        localStorage.setItem(`animePlaylist-${currentUser}`, JSON.stringify(myPlaylist));
+      } catch {}
+    }
+  }, [myPlaylist, currentUser]);
+ 
+  // ── 帳號操作 ──────────────────────────────────────────────────────────
+  const handleLogin = (username, password) => {
+    // 取得已儲存的帳號清單
+    let accounts = {};
+    try { accounts = JSON.parse(localStorage.getItem('app-accounts') || '{}'); } catch {}
+    
+    if (accounts[username] !== undefined) {
+      // 帳號已存在 → 驗證密碼
+      if (accounts[username] !== password) {
+        return { success: false, error: '密碼錯誤' };
+      }
+    } else {
+      // 新帳號 → 自動註冊
+      accounts[username] = password;
+      try { localStorage.setItem('app-accounts', JSON.stringify(accounts)); } catch {}
+    }
+    
+    // 登入成功 → 載入該帳號的 playlist
+    try {
+      localStorage.setItem('app-current-user', username);
+      const saved = localStorage.getItem(`animePlaylist-${username}`);
+      setMyPlaylist(saved ? JSON.parse(saved) : []);
+    } catch {}
+    setCurrentUser(username);
+    setShowAuth(false);
+    return { success: true };
+  };
+
+  const handleLogout = () => {
+    try { localStorage.removeItem('app-current-user'); } catch {}
+    setCurrentUser(null);
+    setMyPlaylist([]);
+  };
+
+  const showToast = (message) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 3000);
+  };
+ 
+  const handleAddToList = (anime, status = LIST_STATUS.PLANNED) => {
+    if (!currentUser) { setShowAuth(true); return; }
+    const existingIndex = myPlaylist.findIndex(item => item.id === anime.id);
+    const statusText = status === LIST_STATUS.PLANNED ? 'Planning' : status === LIST_STATUS.WATCHING ? 'Watching' : 'Completed';
+    
+    if (existingIndex === -1) {
+      setMyPlaylist([...myPlaylist, { ...anime, watched: 0, eps: anime.eps || 12, status }]);
+      showToast(`已將《${anime.title}》設定為 ${statusText}！`);
+    } else {
+      setMyPlaylist(prevList => prevList.map(item => item.id === anime.id ? { ...item, status } : item));
+      showToast(`已將《${anime.title}》更新為 ${statusText}！`);
+    }
+    setIsDropdownOpen(false);
+  };
+ 
+  const handleChangeStatus = (animeId, newStatus) => {
+    setMyPlaylist(prevList => prevList.map(anime => anime.id === animeId ? { ...anime, status: newStatus } : anime));
+  };
+ 
+  const handleRemoveFromList = (animeId) => {
+    setMyPlaylist(prevList => prevList.filter(anime => anime.id !== animeId));
+    showToast('已從清單中移除。');
+  };
+ 
+  const handleUpdateProgress = (animeId, episodeNumber) => {
+    setMyPlaylist(prevList => 
+      prevList.map(anime => {
+        if (anime.id === animeId) {
+          const newWatched = anime.watched === episodeNumber ? episodeNumber - 1 : episodeNumber;
+          let newStatus = anime.status;
+          if (newWatched === anime.eps) newStatus = LIST_STATUS.COMPLETED;
+          else if (newWatched > 0 && newWatched < anime.eps) newStatus = LIST_STATUS.WATCHING;
+          return { ...anime, watched: newWatched, status: newStatus };
+        }
+        return anime;
+      })
+    );
+  };
+ 
+  const handleOpenModal = async (baseAnime) => {
+    setIsModalOpen(true);
+    setIsModalLoading(true);
+    setIsDropdownOpen(false); 
+    try {
+      const query = `
+        query($id: Int) {
+          Media(id: $id, type: ANIME) {
+            id 
+            coverImage { extraLarge large medium }
+            trailer { id site thumbnail }
+            characters(sort: ROLE, perPage: 8) {
+              edges { role node { id name { full } image { large } } voiceActors(language: JAPANESE) { name { full } } }
+            }
+          }
+        }
+      `;
+      const charResData = await fetchAniList(query, { id: baseAnime.id });
+      const freshImageUrl = charResData.Media?.coverImage?.extraLarge || charResData.Media?.coverImage?.large || charResData.Media?.coverImage?.medium || baseAnime.imageUrl;
+      
+      const formattedCharacters = (charResData.Media?.characters?.edges || []).map(c => ({
+        id: c.node.id,
+        name: c.node.name.full,
+        image: c.node.image?.large,
+        actorName: c.voiceActors && c.voiceActors.length > 0 ? c.voiceActors[0].name.full : '未知'
+      }));
+ 
+      const trailerData = charResData.Media?.characters?.trailer || charResData.Media?.trailer;
+      let trailerUrl = null;
+      if (trailerData) {
+        if (trailerData.site?.toLowerCase() === 'youtube') {
+          trailerUrl = `https://www.youtube.com/embed/${trailerData.id}`;
+        } else if (trailerData.site?.toLowerCase() === 'dailymotion') {
+          trailerUrl = `https://www.dailymotion.com/embed/video/${trailerData.id}`;
+        }
+      }
+ 
+      const fullData = {
+        ...baseAnime,
+        imageUrl: freshImageUrl,
+        eps: baseAnime.eps || 12,
+        characters: formattedCharacters,
+        trailer: trailerUrl,
+        trailerRaw: trailerData
+      };
+ 
+      setModalData(fullData);
+      setMyPlaylist(prev => prev.map(item => item.id === baseAnime.id ? { ...item, eps: fullData.eps } : item));
+    } catch (error) {
+      setModalData({ ...baseAnime });
+    } finally {
+      setIsModalLoading(false);
+    }
+  };
+ 
+  useEffect(() => {
+    let isMounted = true;
+    
+    const fetchAllAiringData = async () => {
+      setIsHomeLoading(true);
+ 
+      const d = new Date();
+      const year = d.getFullYear();
+      const month = d.getMonth() + 1;
+      
+      let currentSeason, currentYear, prevSeason, prevYear;
+      
+      if (month >= 1 && month <= 3) { currentSeason = 'WINTER'; currentYear = year; prevSeason = 'FALL'; prevYear = year - 1; } 
+      else if (month >= 4 && month <= 6) { currentSeason = 'SPRING'; currentYear = year; prevSeason = 'WINTER'; prevYear = year; } 
+      else if (month >= 7 && month <= 9) { currentSeason = 'SUMMER'; currentYear = year; prevSeason = 'SPRING'; prevYear = year; } 
+      else { currentSeason = 'FALL'; currentYear = year; prevSeason = 'SUMMER'; prevYear = year; }
+ 
+      if (isMounted) {
+        setCurrentSeasonInfo({ currentSeason, currentYear, prevSeason, prevYear });
+      }
+ 
+      if (homeSeasonCache) {
+        if (isMounted) {
+          setAllSeasonAnime(homeSeasonCache);
+          setIsHomeLoading(false);
+        }
+        return;
+      }
+ 
+      try {
+        let allFetched = [];
+ 
+        const fetchSeasonPage = async (season, year, isCurrentSeason) => {
+          let hasNextPage = true;
+          let page = 1;
+          const maxPages = isCurrentSeason ? 5 : 2; 
+ 
+          while (hasNextPage && page <= maxPages) {
+            const query = `
+              query($season: MediaSeason, $seasonYear: Int, $page: Int) {
+                Page(page: $page, perPage: 50) {
+                  pageInfo { hasNextPage }
+                  media(season: $season, seasonYear: $seasonYear, type: ANIME, countryOfOrigin: "JP", sort: POPULARITY_DESC) {
+                    id title { romaji english native } coverImage { extraLarge large } meanScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
+                  }
+                }
+              }
+            `;
+            const data = await fetchAniList(query, { season, seasonYear: year, page });
+            
+            if (data.Page && data.Page.media) {
+              const filterStatus = isCurrentSeason ? [] : ['RELEASING'];
+              const filteredMedia = data.Page.media.filter(a => 
+                (isCurrentSeason || filterStatus.includes(a.status)) &&
+                !a.isAdult && 
+                !(a.genres && a.genres.includes('Hentai'))
+              );
+              allFetched = [...allFetched, ...filteredMedia];
+            }
+            
+            hasNextPage = data.Page?.pageInfo?.hasNextPage || false;
+            page++;
+          }
+        };
+ 
+        await fetchSeasonPage(currentSeason, currentYear, true);
+        await fetchSeasonPage(prevSeason, prevYear, false);
+ 
+        if (isMounted) {
+          const uniqueMap = new Map();
+          allFetched.forEach(anime => {
+             if(['TV', 'ONA', 'OVA', 'SPECIAL', 'TV_SHORT', 'MUSIC'].includes(anime.format)) {
+                 uniqueMap.set(anime.id, anime);
+             }
+          });
+          
+          const formatted = Array.from(uniqueMap.values()).map(formatAnilistAnime);
+          
+          homeSeasonCache = formatted; 
+          setAllSeasonAnime(formatted);
+        }
+      } catch (error) {
+        console.error('Fetch error in Home:', error);
+      } finally {
+        if (isMounted) setIsHomeLoading(false);
+      }
+    };
+    
+    fetchAllAiringData();
+    return () => { isMounted = false; };
+  }, []);
+ 
+  const showCalendarDot = useMemo(() => {
+    const today = new Date();
+    const todayY = today.getFullYear(), todayM = today.getMonth(), todayD = today.getDate();
+    const WEEK = 7 * 24 * 3600;
+    return myPlaylist.filter(a => a.status === LIST_STATUS.WATCHING).some(anime => {
+      if (anime.nextAiringAt) {
+        const anchorTs = anime.nextAiringAt;
+        const anchorEp = (anime.airingEpisode || 0) + 1;
+        for (let w = -52; w <= 52; w++) {
+          const ts = anchorTs + w * WEEK;
+          const d = new Date(ts * 1000);
+          if (d.getFullYear() === todayY && d.getMonth() === todayM && d.getDate() === todayD) {
+            const ep = anchorEp + w;
+            if (ep < 1) continue;
+            if (anime.eps && ep > anime.eps) continue;
+            return true;
+          }
+        }
+      } else if (anime.broadcastDayIndex >= 0) {
+        const jsDay = today.getDay();
+        const idx = jsDay === 0 ? 6 : jsDay - 1;
+        return idx === anime.broadcastDayIndex;
+      }
+      return false;
+    });
+  }, [myPlaylist]);
+
+  return (
+    <div className={`fixed inset-0 w-full h-full font-sans flex flex-col overflow-hidden border-0 outline-none m-0 p-0 transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a] text-gray-100 selection:bg-gray-700' : 'bg-white text-gray-900 selection:bg-gray-200'}`}>
+      
+      {toast && (
+        <div className={`fixed top-20 right-6 z-50 px-6 py-3 rounded-none shadow-xl text-sm font-bold flex items-center gap-3 animate-fade-in-down border transition-colors duration-300 ${theme === 'dark' ? 'bg-white text-black border-gray-200' : 'bg-black text-white border-gray-800'}`}>
+          <CheckIcon className={`w-5 h-5 ${theme === 'dark' ? 'text-black' : 'text-white'}`} />
+          {toast}
+        </div>
+      )}
+ 
+      <nav className={`h-24 shrink-0 w-full flex items-center justify-between z-40 transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+        <div className="w-full lg:w-[35%] flex items-center px-8 lg:pl-8 lg:pr-8">
+          <div className="w-full max-w-[480px] ml-auto flex items-center">
+            <div onClick={() => setCurrentPage('home')} className="flex items-center cursor-pointer hover:opacity-80 transition-opacity">
+              <span className={`fascinate-regular w-12 h-12 lg:w-[60px] lg:h-[60px] flex items-center justify-center text-4xl lg:text-5xl transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>W</span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="flex-1 flex justify-end items-center px-8 md:pr-12 lg:pr-24 min-[1920px]:pr-[280px]">
+          <div className={`hidden md:flex items-center gap-8 lg:gap-12 font-bold text-sm ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+            <button onClick={() => setCurrentPage('calendar')} className={`relative flex items-center transition-colors border-none bg-transparent hover:opacity-70 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              <svg className="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              Calendar
+              {showCalendarDot && (
+                <span className="absolute -top-1 -right-2 w-1.5 h-1.5 rounded-full bg-[#F75C2F]" />
+              )}
+            </button>
+            <button onClick={() => setCurrentPage('anime')} className={`flex items-center transition-colors border-none bg-transparent hover:opacity-70 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              <img src={keyframeIcon} alt="anime" className={`w-3.5 h-3.5 mr-1.5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
+              Anime
+            </button>
+            <button onClick={() => { if (!currentUser) setShowAuth(true); else setCurrentPage('profile'); }} className={`flex items-center transition-colors border-none bg-transparent hover:opacity-70 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              <img src={userIcon} alt="profile" className={`w-3 h-3 mr-1.5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
+              My Profile
+            </button>
+
+            <button 
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              className={`relative w-10 h-5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-300 border-none ml-2 ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-200'}`}
+              title="切換日夜模式"
+            >
+              <div className={`w-4 h-4 rounded-full shadow-sm transform transition-transform duration-300 flex items-center justify-center bg-white ${theme === 'dark' ? 'translate-x-5' : 'translate-x-0'}`}>
+                {theme === 'dark' ? (
+                  <svg className="w-2.5 h-2.5 text-gray-800" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                  </svg>
+                ) : (
+                  <svg className="w-2.5 h-2.5 text-gray-800" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
+                )}
+              </div>
+            </button>
+          </div>
+          
+          <div className="relative hidden sm:flex items-center ml-8 lg:ml-12">
+            <svg className={`absolute left-0 w-4 h-4 transition-colors duration-300 z-10 ${theme === 'dark' ? 'text-white' : 'text-black'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search for Anime..."
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              onFocus={() => setShowSearchDrop(true)}
+              onKeyDown={(e) => { if (e.key === 'Escape') setShowSearchDrop(false); }}
+              className={`text-sm pl-7 pr-2 py-1.5 rounded-none w-48 md:w-56 focus:outline-none transition-colors border-none bg-transparent border-b ${theme === 'dark' ? 'text-white placeholder-gray-500 border-gray-600 focus:border-white' : 'text-black placeholder-gray-400 border-gray-300 focus:border-black'}`}
+              style={{ borderBottomWidth: '1px' }}
+            />
+            {/* 搜尋歷史下拉 */}
+            {showSearchDrop && searchHistory.length > 0 && (
+              <div
+                ref={searchDropRef}
+                className={`absolute top-full left-0 mt-2 w-64 z-50 shadow-lg border transition-colors duration-300 ${theme === 'dark' ? 'bg-[#141414] border-[#222]' : 'bg-white border-gray-100'}`}
+              >
+                <div className={`flex items-center justify-end px-3 py-2`}>
+                  <button
+                    onClick={clearHistory}
+                    className={`text-[10px] font-bold border-none bg-transparent transition-colors ${theme === 'dark' ? 'text-gray-600 hover:text-[#F75C2F]' : 'text-gray-300 hover:text-[#F75C2F]'}`}
+                  >
+                    Clear all
+                  </button>
+                </div>
+                {searchHistory.map(item => (
+                  <div
+                    key={item}
+                    className={`flex items-center justify-between px-3 py-2 cursor-pointer transition-colors group ${theme === 'dark' ? 'hover:bg-[#1a1a1a]' : 'hover:bg-gray-50'}`}
+                    onClick={() => { handleSearchChange(item); setShowSearchDrop(false); if (currentPage === 'home') setCurrentPage('anime'); }}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <svg className={`w-3 h-3 shrink-0 ${theme === 'dark' ? 'text-gray-600' : 'text-gray-300'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                      <span className={`text-[12px] font-mono truncate ${theme === 'dark' ? 'text-gray-600' : 'text-gray-400'}`}>{item}</span>
+                    </div>
+                    <button
+                      onClick={(e) => removeHistory(item, e)}
+                      className={`shrink-0 ml-2 text-[10px] border-none bg-transparent opacity-0 group-hover:opacity-100 transition-all ${theme === 'dark' ? 'text-gray-600 hover:text-[#F75C2F]' : 'text-gray-300 hover:text-[#F75C2F]'}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+ 
+        </div>
+      </nav>
+ 
+      <main className={`flex-1 overflow-hidden relative transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+        {currentPage === 'home' && (
+          <HomeView 
+            allSeasonAnime={allSeasonAnime} 
+            currentSeasonInfo={currentSeasonInfo}
+            onAdd={handleAddToList} 
+            onOpenModal={handleOpenModal}
+            isLoading={isHomeLoading}
+            setCurrentPage={setCurrentPage}
+            theme={theme}
+            myPlaylist={myPlaylist}
+          />
+        )}
+        
+        {currentPage === 'anime' && (
+          <CatalogView 
+            searchQuery={searchQuery}
+            onAdd={handleAddToList} onOpenModal={handleOpenModal}
+            theme={theme}
+            myPlaylist={myPlaylist}
+          />
+        )}
+ 
+        {currentPage === 'profile' && (
+          <ProfileView 
+            playlist={myPlaylist} onUpdateProgress={handleUpdateProgress}
+            onChangeStatus={handleChangeStatus} onRemove={handleRemoveFromList} onOpenModal={handleOpenModal}
+            theme={theme}
+            currentUser={currentUser}
+            onShowAuth={() => setShowAuth(true)}
+            onLogout={handleLogout}
+          />
+        )}
+ 
+        {currentPage === 'calendar' && (
+          <CalendarView
+            myPlaylist={myPlaylist}
+            onOpenModal={handleOpenModal}
+            theme={theme}
+          />
+        )}
+      </main>
+ 
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+          <div className={`absolute inset-0 backdrop-blur-sm cursor-pointer transition-colors duration-300 ${theme === 'dark' ? 'bg-black/80' : 'bg-black/60'}`} onClick={() => setIsModalOpen(false)}></div>
+          <div className={`relative w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-none shadow-2xl flex flex-col md:flex-row transition-colors duration-300 ${theme === 'dark' ? 'bg-[#141414]' : 'bg-white'}`}>
+            <button onClick={() => setIsModalOpen(false)} className={`absolute top-4 right-4 z-10 w-8 h-8 rounded-none flex items-center justify-center transition-colors border-none ${theme === 'dark' ? 'bg-[#222] text-gray-500 hover:bg-white hover:text-black' : 'bg-gray-100 text-gray-500 hover:bg-black hover:text-white'}`}>✕</button>
+ 
+            {isModalLoading ? (
+              <div className={`w-full p-32 text-center font-mono text-sm flex flex-col items-center ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+                <svg className={`animate-spin h-8 w-8 mb-4 ${theme === 'dark' ? 'text-white' : 'text-black'}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                Fetching data...
+              </div>
+            ) : modalData && (
+              <>
+                <div className={`w-full md:w-[30%] p-8 flex flex-col items-center border-r transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0f0f0f] border-[#222]' : 'bg-gray-50 border-gray-100'}`}>
+                  <img src={modalData.imageUrl} alt="poster" className={`w-full max-w-[220px] rounded-[12px] shadow-md mb-6 transition-colors duration-300 ${theme === 'dark' ? 'bg-gray-800' : 'bg-gray-200'}`} />
+                  
+                  {(() => {
+                    const inPlaylist = myPlaylist.find(item => item.id === modalData.id);
+                    
+                    if (inPlaylist && inPlaylist.status === LIST_STATUS.WATCHING) {
+                      return (
+                        <div className="w-full mb-6">
+                          <div className={`text-center py-2 font-bold text-sm border-b flex justify-between px-4 transition-colors duration-300 ${theme === 'dark' ? 'bg-[#141414] text-gray-200 border-[#222]' : 'bg-white text-gray-800 border-gray-100'}`}>
+                            <span>進度 ({inPlaylist.watched} / {modalData.eps || '?'})</span>
+                            <span className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-black'}`}>觀看中</span>
+                          </div>
+                          <div className={`p-3 flex gap-2 overflow-x-auto scrollbar-hide transition-colors duration-300 ${theme === 'dark' ? 'bg-[#141414]' : 'bg-white'}`}>
+                            {Array.from({ length: modalData.eps || 12 }, (_, i) => i + 1).map(ep => (
+                              <button
+                                key={ep}
+                                onClick={() => handleUpdateProgress(modalData.id, ep)}
+                                className={`flex-none w-8 h-8 rounded-none text-xs font-bold transition-all border-none ${
+                                  ep <= inPlaylist.watched 
+                                    ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') 
+                                    : (theme === 'dark' ? 'bg-[#222] text-gray-400 hover:bg-[#333]' : 'bg-gray-50 text-gray-400 hover:bg-gray-200')
+                                }`}
+                              >
+                                {ep}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <div className="w-full max-w-[220px] mb-6 relative mx-auto">
+                          <div className={`flex w-full h-[44px] rounded-[4px] overflow-hidden shadow-sm transition-colors duration-300 ${theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white'}`}>
+                            <button 
+                              className={`flex-1 font-medium text-[16px] transition-colors flex items-center justify-center tracking-wide border-none bg-transparent ${theme === 'dark' ? 'hover:bg-gray-200 text-black' : 'hover:bg-gray-800 text-white'}`}
+                              onClick={() => {
+                                if (!inPlaylist) {
+                                  handleAddToList(modalData, LIST_STATUS.PLANNED);
+                                } else {
+                                   setIsDropdownOpen(!isDropdownOpen);
+                                }
+                              }}
+                            >
+                              {inPlaylist 
+                                ? (inPlaylist.status === LIST_STATUS.PLANNED ? 'Planning' : 'Completed')
+                                : 'Add to List'}
+                            </button>
+                            <div className={`w-[1px] ${theme === 'dark' ? 'bg-black/20' : 'bg-white/20'}`}></div>
+                            <button 
+                              className={`w-12 flex items-center justify-center transition-colors border-none bg-transparent ${theme === 'dark' ? 'hover:bg-gray-200 text-black' : 'hover:bg-gray-800 text-white'}`}
+                              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                            >
+                              <svg className={`w-5 h-5 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 9l-7 7-7-7"></path></svg>
+                            </button>
+                          </div>
+ 
+                          {isDropdownOpen && (
+                            <div className={`absolute top-[48px] left-0 w-full border shadow-xl z-50 flex flex-col rounded-[4px] transition-colors duration-300 ${theme === 'dark' ? 'bg-[#1a1a1a] border-[#333]' : 'bg-white border-gray-200'}`}>
+                              <button 
+                                onClick={() => handleAddToList(modalData, LIST_STATUS.WATCHING)}
+                                className={`w-full text-left px-5 py-3 text-[15px] font-medium border-b border-none transition-colors ${theme === 'dark' ? 'text-gray-300 hover:bg-[#222] hover:text-white border-[#333]' : 'text-[#556376] hover:bg-gray-50 hover:text-black border-gray-100'}`}
+                              >
+                                Set as Watching
+                              </button>
+                              <button 
+                                onClick={() => handleAddToList(modalData, LIST_STATUS.PLANNED)}
+                                className={`w-full text-left px-5 py-3 text-[15px] font-medium border-b border-none transition-colors ${theme === 'dark' ? 'text-gray-300 hover:bg-[#222] hover:text-white border-[#333]' : 'text-[#556376] hover:bg-gray-50 hover:text-black border-gray-100'}`}
+                              >
+                                Set as Planning
+                              </button>
+                              <button 
+                                onClick={() => handleAddToList(modalData, LIST_STATUS.COMPLETED)}
+                                className={`w-full text-left px-5 py-3 text-[15px] font-medium border-none transition-colors ${theme === 'dark' ? 'text-gray-300 hover:bg-[#222] hover:text-white' : 'text-[#556376] hover:bg-gray-50 hover:text-black'}`}
+                              >
+                                Set as Completed
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                  })()}
+                  
+                  <div className={`w-full space-y-3 text-sm font-medium mt-auto transition-colors duration-300 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
+                    <div className={`flex justify-between pb-2 border-b ${theme === 'dark' ? 'border-[#333]' : 'border-gray-200'}`}>
+                      <span>評分</span>
+                      <span className={`flex items-center gap-1 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+                        {sparkleIcon && <img src={sparkleIcon} className={`w-3.5 h-3.5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} alt="star" />} 
+                        {modalData.score}
+                      </span>
+                    </div>
+                    <div className={`flex justify-between pb-2 border-b ${theme === 'dark' ? 'border-[#333]' : 'border-gray-200'}`}><span>人氣</span><span className={theme === 'dark' ? 'text-white' : 'text-black'}>{modalData.users ? modalData.users.toLocaleString() : '0'}</span></div>
+                    <div className={`flex justify-between pb-2 border-b ${theme === 'dark' ? 'border-[#333]' : 'border-gray-200'}`}><span>總集數</span><span className={theme === 'dark' ? 'text-white' : 'text-black'}>{modalData.eps || '?'} 集</span></div>
+                    <div className={`flex justify-between pb-2 border-b ${theme === 'dark' ? 'border-[#333]' : 'border-gray-200'}`}><span>放送日期</span><span className={theme === 'dark' ? 'text-white' : 'text-black'}>{modalData.airDateStr}</span></div>
+                  </div>
+                </div>
+ 
+                <div className={`w-full md:w-[70%] p-8 md:p-10 overflow-y-auto max-h-[90vh] transition-colors duration-300 ${theme === 'dark' ? 'bg-[#141414]' : 'bg-white'}`}>
+                  <div className="mb-8">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-none tracking-wider ${
+                        modalData.status === 'Currently Airing' 
+                          ? (theme === 'dark' ? 'bg-[#dbe6ff] text-black' : 'bg-black text-[#dfe9ff]') 
+                          : (modalData.status === 'Finished Airing' 
+                              ? (theme === 'dark' ? 'bg-[#BDC0BA] text-black' : 'bg-black text-[#BDC0BA]') 
+                              : (modalData.status === 'Upcoming'
+                                  ? (theme === 'dark' ? 'bg-[#E8F5BD] text-black' : 'bg-black text-[#E8F5BD]')
+                                  : (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white')))
+                      }`}>{modalData.status}</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-none ${theme === 'dark' ? 'bg-[#222] text-gray-300' : 'bg-gray-100 text-gray-600'}`}>{modalData.format}</span>
+                    </div>
+                    <h2 className={`text-3xl font-black mb-1 leading-tight ${theme === 'dark' ? 'text-white' : 'text-black'}`}>{modalData.title}</h2>
+                    <p className={`text-sm mb-6 font-mono ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>{modalData.originalName}</p>
+                    
+                    <h3 className={`text-sm font-bold mb-2 uppercase tracking-wider ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Synopsis</h3>
+                    <p className={`text-sm leading-relaxed whitespace-pre-wrap ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>{modalData.synopsis}</p>
+                  </div>
+ 
+                  {modalData.characters && modalData.characters.length > 0 && (
+                    <div className={`mt-8 border-t pt-8 ${theme === 'dark' ? 'border-[#333]' : 'border-gray-100'}`}>
+                      <h3 className={`text-sm font-bold mb-4 uppercase tracking-wider ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Characters</h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {modalData.characters.map(char => (
+                          <div key={char.id} className={`p-2 flex items-center gap-2 rounded-none transition-colors border-none ${theme === 'dark' ? 'bg-[#1a1a1a]' : 'bg-gray-50'}`}>
+                            {char.image ? <img src={char.image} alt={char.name} className="w-8 h-8 rounded-none object-cover shrink-0" /> : <div className={`w-8 h-8 rounded-none shrink-0 ${theme === 'dark' ? 'bg-gray-800' : 'bg-gray-200'}`}></div>}
+                            <div className="overflow-hidden">
+                              <p className={`text-xs font-bold truncate ${theme === 'dark' ? 'text-gray-100' : 'text-gray-900'}`}>{char.name}</p>
+                              <p className="text-[10px] text-gray-500 truncate">CV: {char.actorName}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+ 
+                  {modalData.trailer && (
+                    <div className={`mt-8 border-t pt-8 ${theme === 'dark' ? 'border-[#333]' : 'border-gray-100'}`}>
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className={`text-sm font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Trailer</h3>
+                        {modalData.trailerRaw?.site?.toLowerCase() === 'youtube' && (
+                          <a 
+                            href={`https://www.youtube.com/watch?v=${modalData.trailerRaw.id}`} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className={`text-xs font-bold transition-colors flex items-center gap-1 ${theme === 'dark' ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-black'}`}
+                          >
+                            YouTube 觀看 <span className="font-sans text-[10px]">↗</span>
+                          </a>
+                        )}
+                      </div>
+                      
+                      {modalData.trailerRaw?.thumbnail ? (
+                        <a 
+                          href={modalData.trailerRaw?.site?.toLowerCase() === 'youtube' ? `https://www.youtube.com/watch?v=${modalData.trailerRaw.id}` : modalData.trailer}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block w-full aspect-video rounded-[12px] shadow-md bg-[#111] relative overflow-hidden cursor-pointer group"
+                        >
+                          <img 
+                            src={modalData.trailerRaw.thumbnail} 
+                            alt={`${modalData.title} Trailer`} 
+                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                          />
+                        </a>
+                      ) : (
+                        <a 
+                          href={modalData.trailerRaw?.site?.toLowerCase() === 'youtube' ? `https://www.youtube.com/watch?v=${modalData.trailerRaw.id}` : modalData.trailer}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`flex items-center justify-center w-full aspect-video rounded-[12px] shadow-md border-2 border-dashed transition-colors ${theme === 'dark' ? 'border-[#333] hover:border-gray-500 bg-[#111]' : 'border-gray-200 hover:border-gray-400 bg-gray-50'}`}
+                        >
+                          <div className={`flex items-center gap-2 font-bold ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+                             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                             Watch Trailer
+                          </div>
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+ 
+      {currentPage === 'home' && !isModalOpen && (
+        <FooterMarquee playlist={myPlaylist} theme={theme} />
+      )}
+ 
+      {showAuth && <AuthModal theme={theme} onLogin={handleLogin} onClose={() => setShowAuth(false)} />}
+
+      <style dangerouslySetInnerHTML={{__html: `
+        @import url('https://fonts.googleapis.com/css2?family=Fascinate&display=swap');
+        .fascinate-regular {
+          font-family: "Fascinate", system-ui;
+          font-weight: 400;
+          font-style: normal;
+        }
+        body { margin: 0; padding: 0; background-color: ${theme === 'dark' ? '#0a0a0a' : '#ffffff'}; border: none; transition: background-color 0.3s ease; }
+        *, *:focus { outline: none !important; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes scroll { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+        @keyframes fade-in-down {
+          0% { opacity: 0; transform: translateY(-10px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        .animate-fade-in-down { animation: fade-in-down 0.3s ease-out forwards; }
+      `}} />
+    </div>
+  );
+}
+ 
+function FooterMarquee({ playlist, theme }) {
+  const watchingList = playlist.filter(item => item.status === LIST_STATUS.WATCHING);
+  const repeatCount = watchingList.length > 0 ? Math.max(4, Math.ceil(20 / watchingList.length)) : 20;
+ 
+  return (
+    <div className={`fixed bottom-0 left-0 w-full h-10 flex items-center overflow-hidden z-50 pointer-events-none border-none transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+      <div className="flex whitespace-nowrap animate-[scroll_300s_linear_infinite] text-[11px] font-mono text-gray-500 font-bold items-center pointer-events-auto">
+        {[...Array(repeatCount)].map((_, i) => (
+          <React.Fragment key={i}>
+            {anilistLogoWhite && <img src={theme === 'dark' ? anilistLogoWhite : anilistLogo} alt="AniList Logo" className="mx-6 w-[18px] h-[18px] object-cover rounded-[4px] shrink-0 transition-all duration-300" />}
+            <span className={`mx-6 tracking-widest uppercase shrink-0 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Currently Watching</span>
+            {watchingList.length > 0 ? (
+              watchingList.map((anime, idx) => (
+                <span key={`${anime.id}-${i}-${idx}`} className={`mx-6 cursor-pointer transition-colors shrink-0 ${theme === 'dark' ? 'hover:text-gray-300 text-white' : 'hover:text-black text-black'}`}>
+                  {anime.title}
+                </span>
+              ))
+            ) : (
+              <span className={`mx-6 cursor-pointer transition-colors shrink-0 ${theme === 'dark' ? 'hover:text-gray-300 text-gray-500' : 'hover:text-black text-gray-400'}`}>None</span>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+ 
+
+function CalendarView({ myPlaylist, onOpenModal, theme }) {
+  const today = new Date();
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today.getMonth());
+
+  const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  const prevMonth = () => {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
+    else setViewMonth(m => m - 1);
+  };
+  const nextMonth = () => {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
+    else setViewMonth(m => m + 1);
+  };
+
+  const isToday = (d) => d && viewYear === today.getFullYear() && viewMonth === today.getMonth() && d === today.getDate();
+
+  const tsToLocalDate = (ts) => {
+    const d = new Date(ts * 1000);
+    return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() };
+  };
+
+  const getAiringDatesInMonth = (anime) => {
+    const results = [];
+    if (anime.nextAiringAt) {
+      const anchorEp = (anime.airingEpisode || 0) + 1;
+      const anchorTs = anime.nextAiringAt;
+      const WEEK = 7 * 24 * 3600;
+      const monthStart = new Date(viewYear, viewMonth, 1).getTime() / 1000;
+      const monthEnd   = new Date(viewYear, viewMonth + 1, 0, 23, 59, 59).getTime() / 1000;
+      const weeksBack  = Math.ceil((anchorTs - monthStart) / WEEK) + 1;
+      const weeksAhead = Math.ceil((monthEnd - anchorTs) / WEEK) + 1;
+      for (let w = -weeksBack; w <= weeksAhead; w++) {
+        const ts = anchorTs + w * WEEK;
+        if (ts < monthStart || ts > monthEnd) continue;
+        const epNum = anchorEp + w;
+        if (epNum < 1) continue;
+        if (anime.eps && epNum > anime.eps) continue;
+        const d = tsToLocalDate(ts);
+        if (d.year === viewYear && d.month === viewMonth) {
+          results.push({ day: d.day, epNum, airingTs: ts });
+        }
+      }
+    } else if (anime.status === 'Currently Airing' && anime.broadcastDayIndex >= 0 && anime.broadcastDayIndex <= 6) {
+      const lastDay = new Date(viewYear, viewMonth + 1, 0).getDate();
+      for (let d = 1; d <= lastDay; d++) {
+        const jsDay = new Date(viewYear, viewMonth, d).getDay();
+        const idx = jsDay === 0 ? 6 : jsDay - 1;
+        if (idx === anime.broadcastDayIndex) {
+          results.push({ day: d, epNum: null, airingTs: null });
+        }
+      }
+    }
+    return results;
+  };
+
+  const watchingList = myPlaylist.filter(a => a.status === LIST_STATUS.WATCHING);
+
+  const dayMap = useMemo(() => {
+    const map = {};
+    watchingList.forEach(anime => {
+      getAiringDatesInMonth(anime).forEach(({ day, epNum, airingTs }) => {
+        if (!map[day]) map[day] = [];
+        map[day].push({ anime, epNum, airingTs });
+      });
+    });
+    Object.keys(map).forEach(day => {
+      map[day].sort((a, b) => {
+        if (a.airingTs == null && b.airingTs == null) return 0;
+        if (a.airingTs == null) return 1;
+        if (b.airingTs == null) return -1;
+        return a.airingTs - b.airingTs;
+      });
+    });
+    return map;
+  }, [watchingList, viewYear, viewMonth]);
+
+  const firstDay = new Date(viewYear, viewMonth, 1);
+  const startOffset = firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1;
+  const totalDays = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startOffset; i++) cells.push(null);
+  for (let d = 1; d <= totalDays; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+
+  return (
+    <div className={`h-full overflow-y-auto px-6 lg:px-16 py-10 pb-24 scrollbar-hide transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a] text-white' : 'bg-white text-black'}`}>
+      <div className="max-w-[1600px] mx-auto">
+
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <h1 className={`text-3xl fascinate-regular transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+            {MONTH_NAMES[viewMonth]} {viewYear}
+          </h1>
+          <div className="flex items-center gap-3">
+            <button onClick={prevMonth} className={`w-8 h-8 flex items-center justify-center border-none bg-transparent transition-colors ${theme === 'dark' ? 'text-gray-400 hover:text-white' : 'text-gray-400 hover:text-black'}`}>
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7"/></svg>
+            </button>
+            <button
+              onClick={() => { setViewYear(today.getFullYear()); setViewMonth(today.getMonth()); }}
+              className={`text-[11px] font-mono px-3 py-1 border transition-colors ${theme === 'dark' ? 'border-[#333] text-gray-400 hover:text-white hover:border-white' : 'border-gray-200 text-gray-400 hover:text-black hover:border-black'}`}
+            >
+              Today
+            </button>
+            <button onClick={nextMonth} className={`w-8 h-8 flex items-center justify-center border-none bg-transparent transition-colors ${theme === 'dark' ? 'text-gray-400 hover:text-white' : 'text-gray-400 hover:text-black'}`}>
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Day labels */}
+        <div className="grid grid-cols-7 mb-2">
+          {DAY_LABELS.map(label => (
+            <div key={label} className={`text-[10px] font-mono text-center pb-3 ${theme === 'dark' ? 'text-gray-600' : 'text-gray-400'}`}>
+              {label}
+            </div>
+          ))}
+        </div>
+
+        {/* Calendar grid */}
+        <div className={`border-t ${theme === 'dark' ? 'border-[#1e1e1e]' : 'border-gray-100'}`}>
+          {weeks.map((week, wi) => (
+            <div key={wi} className={`grid grid-cols-7 border-b ${theme === 'dark' ? 'border-[#1e1e1e]' : 'border-gray-100'}`}>
+              {week.map((day, di) => {
+                const entries = day ? (dayMap[day] || []) : [];
+                const todayCell = isToday(day);
+                return (
+                  <div
+                    key={di}
+                    className={`min-h-[140px] lg:min-h-[200px] p-2 border-r last:border-r-0 transition-colors ${theme === 'dark' ? 'border-[#1e1e1e]' : 'border-gray-100'} ${!day ? (theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-gray-50/40') : ''}`}
+                  >
+                    {day && (
+                      <>
+                        <div className="flex justify-end mb-1.5">
+                          <span className={`w-6 h-6 flex items-center justify-center rounded-full ${todayCell ? (theme === 'dark' ? 'bg-[#dbe6ff]' : 'bg-[#dfe9ff]') : ''}`}>
+                            <span className={todayCell ? `font-mono font-bold text-[13px] text-black leading-none` : `text-[11px] font-mono ${theme === 'dark' ? 'text-gray-600' : 'text-gray-400'}`}>
+                              {day}
+                            </span>
+                          </span>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          {entries.map(({ anime, epNum }) => (
+                            <button
+                              key={anime.id}
+                              onClick={() => onOpenModal(anime)}
+                              className={`w-full text-left text-[9px] font-medium px-1.5 py-1 leading-tight truncate transition-colors border-none rounded-none ${theme === 'dark' ? 'bg-[#1a1a1a] text-gray-300 hover:bg-white hover:text-black' : 'bg-gray-100 text-gray-700 hover:bg-black hover:text-white'}`}
+                              title={`${anime.title}${epNum ? ` — Ep ${epNum}` : ''}`}
+                            >
+                              {epNum && <span className="mr-1 opacity-50">Ep{epNum}</span>}
+                              {anime.title}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+
+        {watchingList.length === 0 && (
+          <div className={`text-center pt-16 text-[12px] font-mono ${theme === 'dark' ? 'text-gray-600' : 'text-gray-400'}`}>
+            No anime in your Watching list yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ 
+function HomeView({ allSeasonAnime, currentSeasonInfo, onAdd, onOpenModal, isLoading, setCurrentPage, theme, myPlaylist }) {
+  const currentJS = new Date().getDay(); 
+  const currentDayIndex = currentJS === 0 ? 6 : currentJS - 1; 
+  const [activeTab, setActiveTab] = useState(currentDayIndex);
+  
+  const [itemsPerRow, setItemsPerRow] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1920 ? 4 : 3);
+  
+  useEffect(() => {
+    const handleResize = () => setItemsPerRow(window.innerWidth >= 1920 ? 4 : 3);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+ 
+  const schedule = useMemo(() => {
+    const daysEn = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const map = Array.from({ length: 7 }, (_, i) => ({ id: i, name: daysEn[i], items: [] }));
+    const other = { id: 7, name: 'Other', items: [] }; 
+    
+    allSeasonAnime.forEach(anime => {
+        if (anime.broadcastDayIndex !== null && anime.broadcastDayIndex >= 0 && anime.broadcastDayIndex <= 6) {
+            map[anime.broadcastDayIndex].items.push(anime);
+        } else {
+            other.items.push(anime);
+        }
+    });
+    if (other.items.length > 0) map.push(other);
+    return map;
+  }, [allSeasonAnime]);
+ 
+  const currentList = schedule.find(s => s.id === activeTab)?.items || [];
+ 
+  const rows = useMemo(() => {
+    const result = [];
+    for (let i = 0; i < currentList.length; i += itemsPerRow) {
+      result.push(currentList.slice(i, i + itemsPerRow));
+    }
+    return result;
+  }, [currentList, itemsPerRow]);
+ 
+  return (
+    <div className={`flex flex-col lg:flex-row h-full overflow-hidden relative pb-8 items-start transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+      
+      <div className="w-full lg:w-[35%] h-full flex flex-col px-8 lg:pl-8 lg:pr-8 shrink-0 overflow-y-auto pt-[12vh] min-[1920px]:pt-[18vh]">
+        <div className="w-full max-w-[480px] ml-auto flex flex-col h-full pb-[10vh]">
+          
+          <p className={`text-[15px] font-medium mb-12 flex items-center gap-2 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+            Powered by AniList GraphQL API <span className="font-sans">↗</span>
+          </p>
+          
+          <h1 className={`text-[4.5rem] min-[1920px]:text-[5.5rem] tracking-tight mb-10 fascinate-regular leading-none transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+            Willy List
+          </h1>
+          
+          <p className={`text-[16px] leading-relaxed mb-16 font-medium transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+            Willy List is an unofficial & open-source platform for the 
+            <br/><strong>"most active online anime community and database"</strong>.
+          </p>
+ 
+          <div className={`grid grid-cols-1 md:grid-cols-2 gap-y-8 gap-x-6 text-[15px] font-medium transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+            <div className="flex items-center gap-3">
+              {codeIcon && <img src={codeIcon} alt="API" className={`w-5 h-5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />}
+              GraphQL API
+            </div>
+            <a href="https://anilist.co/" target="_blank" rel="noopener noreferrer" className={`flex items-center gap-3 hover:opacity-70 transition-opacity no-underline ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              {anilistIcon && <img src={anilistIcon} alt="AniList" className={`w-5 h-5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />}
+              AniList
+            </a>
+            <a href="https://github.com/Willy-228/Willy-List" target="_blank" rel="noopener noreferrer" className={`flex items-center gap-3 hover:opacity-70 transition-opacity no-underline ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              {developerIcon && <img src={developerIcon} alt="GitHub" className={`w-5 h-5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />}
+              GitHub
+            </a>
+            <a href="https://www.notion.so/Anime-2e1d8b733d024f98a2767ae4209e525b?di=182b0c4e59934b4e853f90c1898138e7" target="_blank" rel="noopener noreferrer" className={`flex items-center gap-3 hover:opacity-70 transition-opacity no-underline ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              {notionIcon && <img src={notionIcon} alt="Notion" className={`w-5 h-5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />}
+              Willy-Anime
+            </a>
+          </div>
+ 
+        </div>
+      </div>
+ 
+      <div className="w-full lg:w-[65%] h-full flex flex-col relative overflow-hidden">
+        
+        <div className={`shrink-0 w-full pt-[12vh] min-[1920px]:pt-[18vh] pb-6 px-8 flex flex-col items-start gap-6 z-10 transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+          <div className={`flex items-center gap-3 text-sm font-mono w-fit ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+            <span className="font-black tracking-wide">GET</span>
+            <span className="font-medium truncate flex items-center">
+              https://anilist.co/api/v2/oauth/pin
+            </span>
+          </div>
+ 
+          {!isLoading && allSeasonAnime.length > 0 && (
+            <div className="flex gap-8 overflow-x-auto scrollbar-hide w-full justify-start mt-2">
+              {schedule.map((day) => (
+                <span 
+                  key={day.id} 
+                  onClick={() => setActiveTab(day.id)} 
+                  className={`text-[12px] cursor-pointer transition-colors whitespace-nowrap font-normal tracking-wide ${activeTab === day.id ? (theme === 'dark' ? 'text-white border-b-[2px] border-white pb-1.5' : 'text-black border-b-[2px] border-black pb-1.5') : (theme === 'dark' ? 'text-gray-400 hover:text-white pb-1.5' : 'text-gray-400 hover:text-black pb-1.5')}`}
+                >
+                  {day.name} {day.id === currentDayIndex && <span className="text-[10px] opacity-50 ml-1">(today)</span>}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+ 
+        <div className="flex-1 overflow-y-auto overflow-x-auto scrollbar-hide px-8 pb-24">
+          {isLoading ? (
+            <div className={`w-full flex flex-col items-center justify-center space-y-4 py-20 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+              <svg className={`animate-spin h-8 w-8 ${theme === 'dark' ? 'text-white' : 'text-black'}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            </div>
+          ) : rows.length > 0 ? (
+            <div className="flex flex-col gap-4 w-max pb-12">
+              {rows.map((row, rowIndex) => (
+                <div 
+                  key={rowIndex} 
+                  className="flex gap-3 transition-all"
+                  style={{ marginLeft: `${rowIndex * 1.25}rem` }}
+                >
+                  {row.map((anime) => (
+                    <div key={anime.id} className="w-[320px] min-[1920px]:w-[360px] shrink-0 flex">
+                      <AnimeCardHome 
+                        anime={anime} 
+                        onAdd={() => onAdd(anime, LIST_STATUS.PLANNED)} 
+                        onClick={() => onOpenModal(anime)} 
+                        theme={theme}
+                        myPlaylist={myPlaylist}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="w-full flex items-start pt-12 justify-center text-gray-400 text-sm">此分類暫無播出中動漫</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+ 
+function AnimeCardHome({ anime, onClick, onAdd, theme, myPlaylist }) {
+  const displayDate = anime.season && anime.year 
+    ? `${anime.season} ${anime.year}` 
+    : (anime.year ? anime.year : (anime.airDateStr ? anime.airDateStr.split('-')[0] : ''));
+ 
+  const isAlreadyInList = myPlaylist.some(item => item.id === anime.id);
+ 
+  return (
+    <div className={`flex gap-5 p-3.5 cursor-pointer relative group transition-all hover:shadow-md rounded-2xl border w-full h-full ${theme === 'dark' ? 'bg-[#141414] border-transparent hover:border-[#333]' : 'bg-white border-transparent hover:border-gray-100'}`} onClick={onClick}>
+      <img src={anime.imageUrl} alt={anime.title} className={`object-cover rounded-[12px] shrink-0 shadow-sm transition-transform group-hover:scale-[1.02] w-[85px] h-[125px] min-[1920px]:w-[105px] min-[1920px]:h-[155px] ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-100'}`} />
+      <div className="flex flex-col flex-1 py-1 min-w-0">
+        
+        <div className={`font-medium mb-1 tracking-wide text-[10px] min-[1920px]:text-[11px] ${anime.status === 'Currently Airing' ? (theme === 'dark' ? 'text-[#dbe6ff]' : 'text-[#dfe9ff]') : (anime.status === 'Finished Airing' ? 'text-[#BDC0BA]' : (anime.status === 'Upcoming' ? 'text-[#E8F5BD]' : (theme === 'dark' ? 'text-gray-600' : 'text-gray-400')))}`}>
+          {anime.status}
+        </div>
+        
+        <div className={`font-medium mb-1.5 flex items-center gap-2 text-[11px] min-[1920px]:text-[12px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+          {displayDate && <span>{displayDate}</span>}
+          {anime.eps && <span>• {anime.eps} eps</span>}
+        </div>
+        
+        <h3 className={`font-bold leading-tight line-clamp-2 pr-2 mb-2.5 text-[14px] min-[1920px]:text-[16px] ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+          {anime.title}
+        </h3>
+        
+        <div className="flex items-center gap-5 mb-2 mt-auto">
+          <div className="flex flex-col">
+            <span className={`font-bold leading-none mb-1 flex items-center gap-1.5 text-[13px] min-[1920px]:text-[14px] ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              {sparkleIcon && <img src={sparkleIcon} className={`w-3.5 h-3.5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} alt="star" />} 
+              {anime.score}
+            </span>
+            <span className={`text-[#BDC0BA] font-medium leading-none text-[9px] min-[1920px]:text-[10px]`}>{anime.users ? (anime.users/1000).toFixed(0)+'k' : '0'} users</span>
+          </div>
+        </div>
+        
+        <div className="flex flex-wrap gap-1 mt-1">
+          {anime.tags?.slice(0, 2).map(tag => (
+            <span key={tag} className={`font-bold px-0 rounded-none truncate max-w-[70px] text-[9px] min-[1920px]:text-[10px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
+              {translateGenre(tag) || tag}
+            </span>
+          ))}
+        </div>
+      </div>
+ 
+      {isAlreadyInList ? (
+        <div className={`absolute bottom-3 right-3 w-[34px] h-[34px] text-lg rounded-full opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center font-bold shadow-md border border-transparent leading-none pt-[2px] ${theme === 'dark' ? 'bg-[#222] text-[#dbe6ff]' : 'bg-gray-100 text-[#556376]'}`} title="已在清單中">
+          ✓
+        </div>
+      ) : (
+        <button onClick={(e) => { e.stopPropagation(); onAdd(anime); }} className={`absolute bottom-3 right-3 w-[34px] h-[34px] text-lg rounded-full opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center font-bold hover:scale-110 shadow-md border-none leading-none pb-[2px] ${theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white'}`} title="加入待播清單">
+          +
+        </button>
+      )}
+    </div>
+  );
+}
+ 
+function AnimeCardHorizontal({ anime, onClick, onAdd, theme, myPlaylist }) {
+  const displayDate = anime.season && anime.year 
+    ? `${anime.season} ${anime.year}` 
+    : (anime.year ? anime.year : (anime.airDateStr ? anime.airDateStr.split('-')[0] : ''));
+ 
+  const isAlreadyInList = myPlaylist.some(item => item.id === anime.id);
+ 
+  return (
+    <div className={`flex gap-4 p-3 cursor-pointer relative group transition-all hover:shadow-lg rounded-2xl border w-full h-full ${theme === 'dark' ? 'bg-[#141414] border-transparent hover:border-[#333]' : 'bg-white border-transparent hover:border-gray-100'}`} onClick={onClick}>
+      <img src={anime.imageUrl} alt={anime.title} className={`w-[85px] h-[125px] object-cover rounded-[12px] shrink-0 shadow-sm transition-transform group-hover:scale-[1.02] ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-100'}`} />
+      <div className="flex flex-col flex-1 py-1 min-w-0">
+        
+        <div className={`text-[10px] font-bold mb-1 tracking-wide ${anime.status === 'Currently Airing' ? (theme === 'dark' ? 'text-[#dbe6ff]' : 'text-[#dfe9ff]') : (anime.status === 'Finished Airing' ? 'text-[#BDC0BA]' : (anime.status === 'Upcoming' ? 'text-[#E8F5BD]' : (theme === 'dark' ? 'text-gray-600' : 'text-gray-400')))}`}>
+          {anime.status}
+        </div>
+        
+        <div className={`text-[11px] font-bold mb-1 flex items-center gap-2 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+          {displayDate && <span>{displayDate}</span>}
+          {anime.eps && <span>• {anime.eps} eps</span>}
+        </div>
+        
+        <h3 className={`text-[14px] font-bold leading-tight line-clamp-2 pr-2 mb-2 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+          {anime.title}
+        </h3>
+        
+        <div className="flex items-center gap-4 mb-2 mt-auto">
+          <div className="flex flex-col">
+            <span className={`text-[13px] font-bold leading-none mb-1 flex items-center gap-1 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              {sparkleIcon && <img src={sparkleIcon} className={`w-3 h-3 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} alt="star" />} 
+              {anime.score}
+            </span>
+            <span className={`text-[9px] text-[#BDC0BA] font-medium leading-none`}>{anime.users ? (anime.users/1000).toFixed(0)+'k' : '0'} users</span>
+          </div>
+        </div>
+        
+        <div className="flex flex-wrap gap-1 mt-1">
+          {anime.tags?.slice(0, 2).map(tag => (
+            <span key={tag} className={`text-[9px] font-bold px-0 rounded-none truncate max-w-[60px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
+              {translateGenre(tag) || tag}
+            </span>
+          ))}
+        </div>
+      </div>
+ 
+      {isAlreadyInList ? (
+        <div className={`absolute bottom-3 right-3 w-7 h-7 text-xs rounded-full opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center font-bold shadow-md border border-transparent leading-none pt-[1px] ${theme === 'dark' ? 'bg-[#222] text-[#dbe6ff]' : 'bg-gray-100 text-[#556376]'}`} title="已在清單中">
+          ✓
+        </div>
+      ) : (
+        <button onClick={(e) => { e.stopPropagation(); onAdd(anime); }} className={`absolute bottom-3 right-3 w-7 h-7 rounded-full opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center font-bold hover:scale-110 shadow-md border-none leading-none pb-[2px] ${theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white'}`} title="加入待播清單">
+          +
+        </button>
+      )}
+    </div>
+  );
+}
+ 
+function CatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
+  const FORMATS = [
+    { id: 'All', label: 'All' },
+    { id: 'TV', label: 'TV' },
+    { id: 'ONA', label: 'ONA' },
+    { id: 'OVA', label: 'OVA' },
+    { id: 'MOVIE', label: 'MOVIE' }
+  ];
+  
+  const [activeFormat, setActiveFormat] = useState('All'); 
+  const [activeGenre, setActiveGenre] = useState('All');
+  const [activeSort, setActiveSort] = useState('SCORE_DESC');
+  const [activeYear, setActiveYear] = useState('All');
+  const [activeSeason, setActiveSeason] = useState('All');
+  const [activeStatus, setActiveStatus] = useState('All');
+
+
+  
+  const [data, setData] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [apiError, setApiError] = useState(null);
+ 
+  useEffect(() => { setCurrentPage(1); }, [searchQuery, activeGenre, activeSort, activeYear, activeSeason, activeFormat, activeStatus]);
+ 
+  useEffect(() => {
+    let isMounted = true;
+    const fetchFilteredData = async () => {
+      setIsLoading(true);
+      setApiError(null);
+      
+      const cacheKey = JSON.stringify({ searchQuery, activeFormat, activeGenre, activeSort, activeYear, activeSeason, activeStatus, currentPage });
+      
+      if (globalApiCache.has(cacheKey)) {
+          const cachedData = globalApiCache.get(cacheKey);
+          if (isMounted) {
+            setData(cachedData.formatted);
+            setTotalPages(cachedData.totalPages);
+            setIsLoading(false);
+          }
+          return;
+      }
+ 
+      try {
+        let variables = { page: currentPage, sort: [activeSort] };
+        
+        if (searchQuery) variables.search = searchQuery;
+        if (activeFormat !== 'All') variables.format = activeFormat;
+        
+        if (activeGenre !== 'All') {
+          variables.genre = activeGenre;
+        }
+        
+        if (activeYear !== 'All') {
+          if (activeYear === '2000以前') {
+             // 傳入 20010000 確保能過濾出所有小於等於 2000 的番劇 (包含以前所有年份)
+             variables.startDateLesser = 20010000;
+             // 新增：限定下限日期，確保過濾掉沒有確切開播日期 (null) 的 Upcoming 動畫
+             variables.startDateGreater = 10000000; 
+          } else {
+             variables.seasonYear = parseInt(activeYear);
+             if (activeSeason !== 'All') variables.season = activeSeason.toUpperCase();
+          }
+        }
+        
+        if (activeStatus !== 'All') {
+            if (activeStatus === 'RELEASING') variables.status = 'RELEASING';
+            else if (activeStatus === 'FINISHED') variables.status = 'FINISHED';
+            else if (activeStatus === 'UPCOMING') variables.status = 'NOT_YET_RELEASED';
+        }
+ 
+        // 【修改處】將 GraphQL 中加入 startDateGreater 以防空日期被撈出
+        const query = `
+          query($page: Int, $search: String, $format: MediaFormat, $genre: String, $status: MediaStatus, $seasonYear: Int, $startDateGreater: FuzzyDateInt, $startDateLesser: FuzzyDateInt, $season: MediaSeason, $sort: [MediaSort]) {
+            Page(page: $page, perPage: 40) {
+              pageInfo { lastPage }
+              media(search: $search, format: $format, genre: $genre, status: $status, seasonYear: $seasonYear, startDate_greater: $startDateGreater, startDate_lesser: $startDateLesser, season: $season, type: ANIME, countryOfOrigin: "JP", sort: $sort, isAdult: false) {
+                id title { romaji english native } coverImage { extraLarge large } meanScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
+              }
+            }
+          }
+        `;
+ 
+        const resData = await fetchAniList(query, variables);
+        
+        if (isMounted && resData.Page) {
+          const formatted = (resData.Page.media || []).map(formatAnilistAnime);
+          const totalP = resData.Page.pageInfo?.lastPage || 1;
+          
+          globalApiCache.set(cacheKey, { formatted, totalPages: totalP });
+          
+          setData(formatted);
+          setTotalPages(totalP);
+        }
+      } catch (error) {
+        console.error(error);
+        if(isMounted) {
+            setData([]);
+            setApiError(error.message.includes('Client Error') ? "沒有找到符合條件的動漫。" : "系統發生錯誤，請稍後再試。");
+        }
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+    
+    const timeoutId = setTimeout(fetchFilteredData, 400);
+    return () => { isMounted = false; clearTimeout(timeoutId); };
+  }, [searchQuery, activeGenre, activeSort, activeYear, activeSeason, activeFormat, activeStatus, currentPage]);
+ 
+  const hasNextPage = currentPage < totalPages;
+ 
+  return (
+    <div className={`h-full overflow-y-auto px-6 lg:px-16 py-10 pb-24 scrollbar-hide transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+      <div className="max-w-[1600px] mx-auto">
+        <h1 className={`text-3xl mb-6 fascinate-regular transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+          Explore
+          {searchQuery && <span className={`text-lg font-sans ml-4 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>/ Search: "{searchQuery}"</span>}
+        </h1>
+
+
+        
+        <div className="flex flex-col mb-10">
+          <div className="flex flex-col gap-6 w-full">
+
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Format</span>
+              <div className="flex gap-2 w-max">
+                {FORMATS.map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => { setActiveFormat(f.id); setCurrentPage(1); }}
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeFormat === f.id ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Status</span>
+              <div className="flex gap-2 w-max">
+                {['All', 'UPCOMING', 'RELEASING', 'FINISHED'].map(s => (
+                  <button 
+                    key={`status-${s}`} 
+                    onClick={() => { setActiveStatus(s); setCurrentPage(1); }} 
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeStatus === s ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}>
+                    {s === 'All' ? 'All' : s === 'UPCOMING' ? 'Upcoming' : s === 'RELEASING' ? 'Airing' : 'Finished'}
+                  </button>
+                ))}
+              </div>
+            </div>
+ 
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Genre</span>
+              <div className="flex gap-2 w-max">
+                {UI_GENRES.map(g => (
+                  <button 
+                    key={`genre-${g}`} 
+                    onClick={() => { setActiveGenre(g); setCurrentPage(1); }} 
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeGenre === g ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}>
+                    {translateGenre(g) || g}
+                  </button>
+                ))}
+              </div>
+            </div>
+ 
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Year</span>
+              <div className="flex gap-2 w-max">
+                {UI_YEARS.map(y => (
+                  <button 
+                    key={`year-${y}`} 
+                    onClick={() => { 
+                      setActiveYear(y); 
+                      setCurrentPage(1);
+                      if (y === 'All' || y === '2000以前') setActiveSeason('All'); 
+                    }} 
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeYear === y ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}>
+                    {y}
+                  </button>
+                ))}
+              </div>
+            </div>
+ 
+            <div className={`flex items-center gap-6 overflow-x-auto scrollbar-hide transition-opacity ${['All', '2000以前'].includes(activeYear) ? 'opacity-20 pointer-events-none' : ''}`}>
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Season</span>
+              <div className="flex gap-2 w-max">
+                {UI_SEASONS.map(s => (
+                  <button 
+                    key={`season-${s}`} 
+                    onClick={() => { setActiveSeason(s); setCurrentPage(1); }} 
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeSeason === s ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex justify-end pt-6 mt-4">
+            <div className="flex items-center gap-3 shrink-0">
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Sort by</span>
+              <button onClick={() => { setActiveSort('SCORE_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'SCORE_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Rated</button>
+              <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
+              <button onClick={() => { setActiveSort('POPULARITY_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'POPULARITY_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Trends</button>
+              <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
+              <button onClick={() => { setActiveSort('START_DATE_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'START_DATE_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Latest</button>
+            </div>
+          </div>
+        </div>
+ 
+        {isLoading ? (
+          <div className={`text-center py-32 font-mono text-sm flex flex-col items-center ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+            <svg className={`animate-spin h-6 w-6 mb-4 ${theme === 'dark' ? 'text-white' : 'text-black'}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            Querying AniList GraphQL API...
+          </div>
+        ) : apiError ? (
+          <div className={`text-center py-32 border border-dashed rounded-none text-sm transition-colors duration-300 ${theme === 'dark' ? 'bg-[#111] border-[#222] text-gray-500' : 'bg-gray-50 border-gray-100 text-gray-400'}`}>
+            {apiError}
+          </div>
+        ) : data.length === 0 ? (
+          <div className={`text-center py-32 border border-dashed rounded-none text-sm transition-colors duration-300 ${theme === 'dark' ? 'bg-[#111] border-[#222] text-gray-500' : 'bg-gray-50 border-gray-100 text-gray-400'}`}>
+            找不到符合條件的動畫，請嘗試其他篩選組合。
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10 w-full mx-auto">
+              {data.map((anime) => (
+                <div key={`cat-${anime.id}`} className="w-full">
+                  <AnimeCardHorizontal anime={anime} onAdd={() => onAdd(anime, LIST_STATUS.PLANNED)} onClick={() => onOpenModal(anime)} theme={theme} myPlaylist={myPlaylist} />
+                </div>
+              ))}
+            </div>
+            
+            <div className={`flex justify-center items-center gap-4 pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
+              <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>PREV</button>
+              <span className={`text-sm font-mono font-bold px-4 py-1.5 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+                {currentPage === totalPages ? `Page ${currentPage} / ${totalPages}` : `Page ${currentPage}`}
+              </span>
+              <button onClick={() => setCurrentPage(p => p + 1)} disabled={!hasNextPage} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>NEXT</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+ 
+function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onOpenModal, theme, currentUser, onShowAuth, onLogout }) {
+  const [activeTab, setActiveTab] = useState(LIST_STATUS.WATCHING);
+  const [sortOrder, setSortOrder] = useState('newest'); 
+  const [activeFormat, setActiveFormat] = useState('All'); 
+  
+  // 【新增】分頁狀態與參數設定
+  const [profilePage, setProfilePage] = useState(1);
+  const ITEMS_PER_PAGE = 60;
+ 
+  const tabs = [
+    { id: LIST_STATUS.WATCHING, label: 'Watching' },
+    { id: LIST_STATUS.PLANNED, label: 'Plan to Watch' },
+    { id: LIST_STATUS.COMPLETED, label: 'Completed' }
+  ];
+  
+  const FORMATS = ['All', 'TV', 'ONA', 'MOVIE'];
+
+  // 當切換篩選條件或排序時，重置回到第一頁
+  useEffect(() => {
+    setProfilePage(1);
+  }, [activeTab, sortOrder, activeFormat]);
+ 
+  const currentList = playlist.filter(item => {
+    if (activeTab === LIST_STATUS.WATCHING) {
+      return item.status === activeTab;
+    } else {
+      return item.status === activeTab && (activeFormat === 'All' || item.format === activeFormat);
+    }
+  });
+ 
+  const sortedList = useMemo(() => {
+    let list = [...currentList];
+    if (activeTab === LIST_STATUS.PLANNED || activeTab === LIST_STATUS.COMPLETED) {
+      list.sort((a, b) => {
+        const getScore = (anime) => {
+          let year = parseInt(anime.year) || 0;
+          if (year === 0 && anime.airDateStr) {
+             const match = anime.airDateStr.match(/\d{4}/);
+             if (match) year = parseInt(match[0]);
+          }
+          let seasonVal = 0;
+          if (anime.season) {
+             const s = anime.season.toLowerCase();
+             if (s === 'winter') seasonVal = 1;
+             else if (s === 'spring') seasonVal = 2;
+             else if (s === 'summer') seasonVal = 3;
+             else if (s === 'fall') seasonVal = 4;
+          }
+          return year * 10 + seasonVal; 
+        };
+ 
+        const scoreA = getScore(a);
+        const scoreB = getScore(b);
+ 
+        if (scoreA === 0 && scoreB !== 0) return 1; 
+        if (scoreB === 0 && scoreA !== 0) return -1;
+ 
+        if (sortOrder === 'newest') return scoreB - scoreA;
+        return scoreA - scoreB;
+      });
+    }
+    return list;
+  }, [currentList, activeTab, sortOrder]);
+
+  // 【新增】分頁處理
+  const totalPages = Math.max(1, Math.ceil(sortedList.length / ITEMS_PER_PAGE));
+  const paginatedList = sortedList.slice((profilePage - 1) * ITEMS_PER_PAGE, profilePage * ITEMS_PER_PAGE);
+ 
+  return (
+    <div className={`h-full overflow-y-auto scrollbar-hide transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+      {/* ── 背板 + 個人資訊 header ── */}
+      <BannerUpload theme={theme} currentUser={currentUser}>
+        {(hasBanner) => (
+        <div className="h-full flex items-center px-6 lg:px-16">
+          <div className="w-full max-w-[1600px] mx-auto flex items-center gap-5">
+            <AvatarUpload theme={theme} currentUser={currentUser} />
+            <div>
+              <h1 className={`text-3xl mb-1 fascinate-regular ${hasBanner ? 'text-white drop-shadow-sm' : (theme === 'dark' ? 'text-white' : 'text-black')}`}>
+                {currentUser ? currentUser + "'s List" : 'My Profile'}
+              </h1>
+              {currentUser ? (
+                <div className="flex items-center gap-4">
+                  <p className={`text-[11px] ${hasBanner ? 'text-white/70' : (theme === 'dark' ? 'text-gray-500' : 'text-gray-400')}`}>
+                    Tracked: {playlist.length} | Completed: {playlist.filter(i => i.status === LIST_STATUS.COMPLETED).length}
+                  </p>
+                  <button onClick={onLogout} className={`text-[11px] font-bold border-none bg-transparent p-0 cursor-pointer transition-colors ${hasBanner ? 'text-white/50 hover:text-white' : (theme === 'dark' ? 'text-gray-600 hover:text-white' : 'text-gray-300 hover:text-black')}`}>Sign Out</button>
+                </div>
+              ) : (
+                <p className={`text-sm transition-colors duration-300 ${hasBanner ? 'text-white/70' : (theme === 'dark' ? 'text-gray-500' : 'text-gray-400')}`}>
+                  <button onClick={onShowAuth} className={`font-bold underline border-none bg-transparent p-0 cursor-pointer ${hasBanner ? 'text-white' : (theme === 'dark' ? 'text-white' : 'text-black')}`}>登入 / 註冊</button> 以儲存你的動漫清單
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+        )}
+      </BannerUpload>
+
+      <div className="px-6 lg:px-16 py-10 pb-24">
+      <div className="max-w-[1600px] mx-auto">
+        <div className={`flex flex-col xl:flex-row justify-between xl:items-end gap-6 mb-10 border-b pb-2 transition-colors duration-300 ${theme === 'dark' ? 'border-[#1a1a1a]' : 'border-gray-50'}`}>
+          <div className="flex gap-8 overflow-x-auto scrollbar-hide shrink-0">
+            {tabs.map(tab => (
+              <button key={tab.id} onClick={() => { setActiveTab(tab.id); setActiveFormat('All'); }} className={`pb-2 text-sm font-bold transition-colors border-none bg-transparent relative shrink-0 ${activeTab === tab.id ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black')}`}>
+                {tab.label}
+                <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-none transition-colors duration-300 ${activeTab === tab.id ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : (theme === 'dark' ? 'bg-[#1a1a1a] text-gray-400' : 'bg-gray-100 text-gray-500')}`}>
+                    {activeTab === LIST_STATUS.WATCHING ? playlist.filter(i => i.status === tab.id).length : playlist.filter(i => i.status === tab.id && (activeFormat === 'All' || i.format === activeFormat)).length}
+                </span>
+                {activeTab === tab.id && <div className={`absolute -bottom-2 left-0 w-full h-0.5 transition-colors duration-300 ${theme === 'dark' ? 'bg-white' : 'bg-black'}`}></div>}
+              </button>
+            ))}
+          </div>
+ 
+          <div className={`flex flex-wrap items-center gap-4 xl:gap-6 mb-2 transition-opacity ${activeTab === LIST_STATUS.WATCHING ? 'invisible pointer-events-none' : 'visible'}`}>
+                <div className="flex items-center gap-3 overflow-x-auto scrollbar-hide">
+                  <span className={`text-[10px] font-bold uppercase tracking-wider shrink-0 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Format</span>
+                  {FORMATS.map(f => (
+                    <button 
+                      key={f} 
+                      onClick={() => setActiveFormat(f)} 
+                      className={`text-xs font-bold transition-colors border-none bg-transparent p-0 whitespace-nowrap ${activeFormat === f ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}
+                    >
+                      {f}
+                    </button>
+                  )).reduce((prev, curr, i) => [prev, <span key={`sep-fmt-${i}`} className={theme === 'dark' ? 'text-gray-700 shrink-0' : 'text-gray-200 shrink-0'}>/</span>, curr])}
+                </div>
+                
+                <div className={`hidden xl:block w-[1px] h-3 ${theme === 'dark' ? 'bg-gray-700' : 'bg-gray-200'}`}></div>
+ 
+                <div className="flex items-center gap-3 shrink-0">
+                    <span className={`text-[10px] font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Date</span>
+                    <button onClick={() => setSortOrder('newest')} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${sortOrder === 'newest' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Newest</button>
+                    <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
+                    <button onClick={() => setSortOrder('oldest')} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${sortOrder === 'oldest' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Oldest</button>
+                </div>
+            </div>
+        </div>
+ 
+        {sortedList.length === 0 ? (
+          <div className={`text-center py-24 border border-dashed text-sm font-mono rounded-none transition-colors duration-300 ${theme === 'dark' ? 'bg-[#111] border-[#222] text-gray-500' : 'bg-gray-50 border-gray-100 text-gray-400'}`}>
+            List is empty.
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 w-full mx-auto">
+              {paginatedList.map(anime => {
+                 const isWatching = activeTab === LIST_STATUS.WATCHING;
+   
+                 return (
+                  <div key={`profile-${anime.id}`} className={`p-4 flex gap-4 relative group transition-all border rounded-2xl ${theme === 'dark' ? 'bg-[#141414] border-transparent hover:border-[#333]' : 'bg-white border-gray-50 hover:border-gray-200'}`}>
+                    <img src={anime.imageUrl} alt="poster" className={`w-[90px] h-[130px] object-cover rounded-[12px] cursor-pointer shrink-0 shadow-sm hover:scale-[1.02] transition-transform ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-100'}`} onClick={() => onOpenModal(anime)} />
+                    <div className="flex-1 flex flex-col min-w-0">
+                      
+                      {!isWatching && (
+                        <div className={`text-[10px] font-bold mb-1.5 tracking-wide ${anime.status === 'Currently Airing' ? (theme === 'dark' ? 'text-[#dbe6ff]' : 'text-[#dfe9ff]') : (anime.status === 'Finished Airing' ? 'text-[#BDC0BA]' : (anime.status === 'Upcoming' ? 'text-[#E8F5BD]' : (theme === 'dark' ? 'text-gray-600' : 'text-gray-400')))}`}>
+                          {anime.status}
+                        </div>
+                      )}
+                      
+                      <h3 className={`font-bold text-[14px] truncate cursor-pointer hover:underline ${!isWatching ? 'mb-2' : 'mb-1'} ${theme === 'dark' ? 'text-white' : 'text-black'}`} onClick={() => onOpenModal(anime)}>{anime.title}</h3>
+                      
+                      {isWatching ? (
+                        <p className={`text-[10px] mb-4 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Total: {anime.eps || '?'} eps</p>
+                      ) : (
+                        <div className={`text-[11px] font-bold mb-1 flex items-center gap-2 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                          {anime.season || anime.year ? <span>{anime.season} {anime.year}</span> : null}
+                          <span className="flex items-center gap-1">
+                            {sparkleIcon && <img src={sparkleIcon} className={`w-3 h-3 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} alt="star" />}
+                            {anime.score}
+                          </span>
+                        </div>
+                      )}
+                      
+                      <div className="mt-auto">
+                        {isWatching && (
+                          <>
+                            <div className={`flex justify-between items-center text-[10px] mb-2 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+                              <span>Progress</span>
+                              <span className={theme === 'dark' ? 'text-white' : 'text-black'}>{anime.watched} / {anime.eps || '?'}</span>
+                            </div>
+                            <div className={`w-full rounded-none h-1.5 mb-4 overflow-hidden transition-colors duration-300 ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-100'}`}>
+                              <div className={`h-full transition-all ${theme === 'dark' ? 'bg-white' : 'bg-black'}`} style={{ width: `${Math.min(100, (anime.watched / (anime.eps || 12)) * 100)}%` }}></div>
+                            </div>
+                          </>
+                        )}
+                        
+                        <div className={`flex justify-end gap-1.5 ${!isWatching ? 'mt-auto' : 'mt-2'}`}>
+                          {isWatching && (
+                            <button onClick={() => onUpdateProgress(anime.id, anime.watched + 1)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>1 EP</button>
+                          )}
+                          {anime.status === LIST_STATUS.PLANNED && (
+                            <>
+                              <button onClick={() => onChangeStatus(anime.id, LIST_STATUS.WATCHING)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>Watching</button>
+                              <button onClick={() => onChangeStatus(anime.id, LIST_STATUS.COMPLETED)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>Completed</button>
+                            </>
+                          )}
+                          <button onClick={() => onRemove(anime.id)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-[#F75C2F]' : 'text-gray-400 hover:text-[#F75C2F]'}`}>Remove</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                 );
+              })}
+            </div>
+            
+            {/* 分頁按鈕區域 */}
+            {totalPages > 1 && (
+              <div className={`flex justify-center items-center gap-4 pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
+                <button onClick={() => setProfilePage(p => Math.max(1, p - 1))} disabled={profilePage === 1} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>PREV</button>
+                <span className={`text-sm font-mono font-bold px-4 py-1.5 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+                  Page {profilePage} / {totalPages}
+                </span>
+                <button onClick={() => setProfilePage(p => Math.min(totalPages, p + 1))} disabled={profilePage === totalPages} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>NEXT</button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      </div>  {/* px wrapper */}
+    </div>
+  );
+}
+ 
+function BannerUpload({ theme, currentUser, children }) {
+  const storageKey = currentUser ? `banner-${currentUser}` : null;
+  const posKey = currentUser ? `banner-pos-${currentUser}` : null;
+  const [bannerUrl, setBannerUrl] = React.useState(() => {
+    if (!storageKey) return null;
+    try { return localStorage.getItem(storageKey) || null; } catch { return null; }
+  });
+  const [pos, setPos] = React.useState(() => {
+    if (!posKey) return { x: 50, y: 50 };
+    try { return JSON.parse(localStorage.getItem(posKey)) || { x: 50, y: 50 }; } catch { return { x: 50, y: 50 }; }
+  });
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [isEditing, setIsEditing] = React.useState(false);
+  const dragStart = React.useRef(null);
+  const fileInputRef = React.useRef(null);
+  const containerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!storageKey) { setBannerUrl(null); return; }
+    try {
+      setBannerUrl(localStorage.getItem(storageKey) || null);
+      setPos(JSON.parse(localStorage.getItem(posKey)) || { x: 50, y: 50 });
+    } catch {}
+  }, [storageKey]);
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !storageKey) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      setBannerUrl(dataUrl);
+      const newPos = { x: 50, y: 50 };
+      setPos(newPos);
+      try {
+        localStorage.setItem(storageKey, dataUrl);
+        localStorage.setItem(posKey, JSON.stringify(newPos));
+      } catch {}
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+    setIsEditing(true);
+  };
+
+  const handleRemove = () => {
+    setBannerUrl(null);
+    setIsEditing(false);
+    try {
+      localStorage.removeItem(storageKey);
+      localStorage.removeItem(posKey);
+    } catch {}
+  };
+
+  const onMouseDown = (e) => {
+    if (!isEditing || !bannerUrl) return;
+    e.preventDefault();
+    dragStart.current = { mx: e.clientX, my: e.clientY, px: pos.x, py: pos.y };
+    setIsDragging(true);
+  };
+
+  React.useEffect(() => {
+    if (!isDragging) return;
+    const onMove = (e) => {
+      if (!dragStart.current || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const dx = ((e.clientX - dragStart.current.mx) / rect.width) * -100;
+      const dy = ((e.clientY - dragStart.current.my) / rect.height) * -100;
+      const newPos = {
+        x: Math.max(0, Math.min(100, dragStart.current.px + dx)),
+        y: Math.max(0, Math.min(100, dragStart.current.py + dy)),
+      };
+      setPos(newPos);
+    };
+    const onUp = () => {
+      setIsDragging(false);
+      if (posKey) try { localStorage.setItem(posKey, JSON.stringify(pos)); } catch {}
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [isDragging, pos, posKey]);
+
+  const hasBanner = !!bannerUrl;
+
+  return (
+    <div
+      ref={containerRef}
+      className={`relative w-full overflow-hidden transition-colors duration-300 ${hasBanner ? '' : (theme === 'dark' ? 'bg-[#111]' : 'bg-white')}`}
+      style={{ height: '300px' }}
+      onMouseDown={hasBanner && isEditing ? onMouseDown : undefined}
+    >
+      {hasBanner && (
+        <img
+          src={bannerUrl}
+          alt="banner"
+          className="absolute inset-0 w-full h-full object-cover pointer-events-none select-none"
+          style={{ objectPosition: `${pos.x}% ${pos.y}%`, cursor: isEditing ? (isDragging ? 'grabbing' : 'grab') : 'default' }}
+          draggable={false}
+        />
+      )}
+
+      {/* 漸層遮罩 */}
+      <div className="absolute inset-0 pointer-events-none" style={{ background: hasBanner ? 'linear-gradient(to top, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.2) 60%, rgba(0,0,0,0) 100%)' : 'none' }} />
+
+      {/* 內容 (children)，佔滿高度以便 flex items-center 置中 */}
+      <div className="relative z-10 h-full">
+        {typeof children === 'function' ? children(hasBanner) : children}
+      </div>
+
+      {/* 右上角操作按鈕，僅登入者 */}
+      {currentUser && (
+        <div className="absolute top-3 right-4 z-20 flex gap-2">
+          {hasBanner && (
+            <button
+              onClick={() => setIsEditing(e => !e)}
+              className={`text-[10px] font-bold px-2.5 py-1 transition-colors border-none rounded-none ${isEditing ? 'bg-white/90 text-black' : 'bg-black/20 text-white/80 hover:bg-black/35'}`}
+            >
+              {isEditing ? '完成' : '調整位置'}
+            </button>
+          )}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="text-[10px] font-bold px-2.5 py-1 bg-black/20 text-white/80 hover:bg-black/35 transition-colors border-none rounded-none"
+          >
+            {hasBanner ? '換背板' : '新增背板'}
+          </button>
+          {hasBanner && (
+            <button
+              onClick={handleRemove}
+              className="text-[10px] font-bold px-2.5 py-1 bg-black/20 text-white/60 hover:bg-[#F75C2F]/70 hover:text-white transition-colors border-none rounded-none"
+            >
+              移除背板
+            </button>
+          )}
+        </div>
+      )}
+
+      {isEditing && hasBanner && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 text-[10px] text-white/70 font-bold pointer-events-none">
+          拖曳調整位置
+        </div>
+      )}
+
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+    </div>
+  );
+}
+
+function AvatarUpload({ theme, currentUser }) {
+  const storageKey = currentUser ? `avatar-${currentUser}` : null;
+  const [avatarUrl, setAvatarUrl] = React.useState(() => {
+    if (!storageKey) return null;
+    try { return localStorage.getItem(storageKey) || null; } catch { return null; }
+  });
+  const fileInputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!storageKey) { setAvatarUrl(null); return; }
+    try { setAvatarUrl(localStorage.getItem(storageKey) || null); } catch {}
+  }, [storageKey]);
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !storageKey) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      setAvatarUrl(dataUrl);
+      try { localStorage.setItem(storageKey, dataUrl); } catch {}
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // 未登入
+  if (!currentUser) {
+    return (
+      <div className={`w-16 h-16 rounded-full overflow-hidden flex items-center justify-center shrink-0 transition-colors duration-300 ${theme === 'dark' ? 'bg-[#1a1a1a] text-gray-600' : 'bg-gray-200 text-gray-400'}`}>
+        <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+        </svg>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="relative group/av shrink-0 cursor-pointer"
+      onClick={() => fileInputRef.current?.click()}
+      title="點擊更換大頭貼"
+    >
+      <div className={`w-16 h-16 rounded-full overflow-hidden flex items-center justify-center transition-colors duration-300 ring-2 ${theme === 'dark' ? 'ring-white/20 bg-[#333] text-white' : 'ring-black/10 bg-gray-200 text-black'}`}>
+        {avatarUrl ? (
+          <img src={avatarUrl} alt="avatar" className="w-full h-full object-cover" draggable={false} />
+        ) : (
+          <span className="text-2xl font-bold font-mono select-none">
+            {currentUser[0].toUpperCase()}
+          </span>
+        )}
+      </div>
+      {/* 相機 overlay */}
+      <div className="absolute inset-0 rounded-full flex items-center justify-center opacity-0 group-hover/av:opacity-100 transition-opacity bg-black/50">
+        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </div>
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+    </div>
+  );
+}
+
+function AuthModal({ theme, onLogin, onClose }) {
+  const [username, setUsername] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [error, setError] = React.useState('');
+  const [isNew, setIsNew] = React.useState(false);
+
+  const handleSubmit = () => {
+    if (!username.trim() || !password.trim()) { setError('請填寫帳號與密碼'); return; }
+    if (username.trim().length < 2) { setError('帳號至少需要 2 個字元'); return; }
+    if (password.length < 4) { setError('密碼至少需要 4 個字元'); return; }
+    const result = onLogin(username.trim(), password);
+    if (!result.success) { setError(result.error); }
+  };
+
+  // Check if username exists to show register hint
+  const checkIsNew = (u) => {
+    try {
+      const accounts = JSON.parse(localStorage.getItem('app-accounts') || '{}');
+      setIsNew(u.trim().length >= 2 && accounts[u.trim()] === undefined);
+    } catch {}
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className={`absolute inset-0 backdrop-blur-sm cursor-pointer ${theme === 'dark' ? 'bg-black/80' : 'bg-black/60'}`} onClick={onClose}></div>
+      <div className={`relative w-full max-w-sm p-10 rounded-none shadow-2xl transition-colors duration-300 ${theme === 'dark' ? 'bg-[#141414]' : 'bg-white'}`}>
+        <button onClick={onClose} className={`absolute top-4 right-4 w-8 h-8 rounded-none flex items-center justify-center transition-colors border-none ${theme === 'dark' ? 'bg-[#222] text-gray-500 hover:bg-white hover:text-black' : 'bg-gray-100 text-gray-500 hover:bg-black hover:text-white'}`}>✕</button>
+
+        <h2 className={`text-2xl fascinate-regular mb-1 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Account</h2>
+        <p className={`text-[12px] font-mono mb-8 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+          {isNew ? '✦ 新帳號，送出即自動註冊' : '輸入帳號與密碼以登入'}
+        </p>
+
+        <div className="flex flex-col gap-4">
+          <div>
+            <label className={`text-[10px] font-bold uppercase tracking-wider block mb-1.5 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Username</label>
+            <input
+              type="text"
+              value={username}
+              onChange={e => { setUsername(e.target.value); setError(''); checkIsNew(e.target.value); }}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+              placeholder="your_name"
+              className={`w-full px-0 py-2 text-sm font-mono border-b bg-transparent focus:outline-none transition-colors ${theme === 'dark' ? 'text-white placeholder-gray-600 border-[#333] focus:border-white' : 'text-black placeholder-gray-300 border-gray-200 focus:border-black'}`}
+              style={{ borderBottomWidth: '1px', borderTop: 'none', borderLeft: 'none', borderRight: 'none' }}
+            />
+          </div>
+          <div>
+            <label className={`text-[10px] font-bold uppercase tracking-wider block mb-1.5 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => { setPassword(e.target.value); setError(''); }}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+              placeholder="••••••"
+              className={`w-full px-0 py-2 text-sm font-mono border-b bg-transparent focus:outline-none transition-colors ${theme === 'dark' ? 'text-white placeholder-gray-600 border-[#333] focus:border-white' : 'text-black placeholder-gray-300 border-gray-200 focus:border-black'}`}
+              style={{ borderBottomWidth: '1px', borderTop: 'none', borderLeft: 'none', borderRight: 'none' }}
+            />
+          </div>
+        </div>
+
+        {error && <p className="text-[11px] text-[#F75C2F] font-bold mt-3">{error}</p>}
+
+        <button
+          onClick={handleSubmit}
+          className={`w-full mt-8 py-3 text-sm font-bold transition-colors rounded-none border-none ${theme === 'dark' ? 'bg-white text-black hover:bg-gray-200' : 'bg-black text-white hover:bg-gray-800'}`}
+        >
+          {isNew ? 'Register & Sign In' : 'Sign In'}
+        </button>
+
+        <p className={`text-[10px] font-mono text-center mt-4 ${theme === 'dark' ? 'text-gray-600' : 'text-gray-400'}`}>
+          帳號密碼儲存於本機，首次登入即自動建立帳號
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CheckIcon({className}) {
+  return <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>;
+}
