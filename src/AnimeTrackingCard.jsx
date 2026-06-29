@@ -362,7 +362,7 @@ export default function App() {
     const statusText = status === LIST_STATUS.PLANNED ? 'Planning' : status === LIST_STATUS.WATCHING ? 'Watching' : 'Completed';
     
     if (existingIndex === -1) {
-      setMyPlaylist([...myPlaylist, { ...anime, watched: 0, eps: anime.eps || 12, status }]);
+      setMyPlaylist([...myPlaylist, { ...anime, watched: 0, eps: anime.eps || null, status }]);
       showToast(`已將《${anime.title}》設定為 ${statusText}！`);
     } else {
       setMyPlaylist(prevList => prevList.map(item => item.id === anime.id ? { ...item, status } : item));
@@ -409,6 +409,21 @@ export default function App() {
             characters(sort: ROLE, perPage: 8) {
               edges { role node { id name { full } image { large } } voiceActors(language: JAPANESE) { name { full } } }
             }
+            relations {
+              edges {
+                relationType(version: 2)
+                node {
+                  id
+                  type
+                  title { romaji english native }
+                  coverImage { large medium }
+                  format
+                  status
+                  averageScore
+                  episodes
+                }
+              }
+            }
           }
         }
       `;
@@ -432,13 +447,85 @@ export default function App() {
         }
       }
  
+      // 遞迴抓整個系列樹
+      const ANIME_RELATION_TYPES = ['SEQUEL','PREQUEL','PARENT','SIDE_STORY','SPIN_OFF','ALTERNATIVE','COMPILATION'];
+      const fetchRelationsPage = async (id) => {
+        const q = `query($id:Int){Media(id:$id,type:ANIME){id relations{edges{relationType(version:2) node{id type title{romaji english} coverImage{large medium} format averageScore episodes startDate{year}}}}}}`;
+        try {
+          const d = await fetchAniList(q, { id });
+          return d?.Media?.relations?.edges || [];
+        } catch { return []; }
+      };
+
+      // BFS 展開：最多 3 層，最多 40 部，只收 ANIME
+      const visited = new Set([baseAnime.id]);
+      const franchiseMap = new Map(); // id → entry
+      const queue = (charResData.Media?.relations?.edges || [])
+        .filter(e => e.node.type === 'ANIME' && ANIME_RELATION_TYPES.includes(e.relationType));
+
+      queue.forEach(e => {
+        if (!visited.has(e.node.id)) {
+          visited.add(e.node.id);
+          franchiseMap.set(e.node.id, e);
+        }
+      });
+
+      // 再往外展開一層（前傳/續集往外追）
+      if (franchiseMap.size < 40) {
+        const secondQueue = [];
+        for (const e of franchiseMap.values()) {
+          if (['SEQUEL','PREQUEL','PARENT'].includes(e.relationType)) {
+            secondQueue.push(e.node.id);
+          }
+        }
+        await Promise.all(secondQueue.slice(0, 6).map(async (nid) => {
+          const edges = await fetchRelationsPage(nid);
+          edges.filter(e => e.node.type === 'ANIME' && ANIME_RELATION_TYPES.includes(e.relationType)).forEach(e => {
+            if (!visited.has(e.node.id)) {
+              visited.add(e.node.id);
+              franchiseMap.set(e.node.id, e);
+            }
+          });
+        }));
+      }
+
+      const RELATION_LABEL = {
+        SEQUEL: 'Sequel', PREQUEL: 'Prequel', ALTERNATIVE: 'Alternative',
+        SPIN_OFF: 'Spin-off', ADAPTATION: 'Adaptation', PARENT: 'Parent Story',
+        SIDE_STORY: 'Side Story', CHARACTER: 'Character', SUMMARY: 'Summary',
+        OTHER: 'Other', SOURCE: 'Source', COMPILATION: 'Compilation',
+      };
+      const RELATION_ORDER = ['PREQUEL','PARENT','SEQUEL','SIDE_STORY','SPIN_OFF','ALTERNATIVE','COMPILATION','ADAPTATION','OTHER'];
+
+      const relatedAnime = [...franchiseMap.values()]
+        .sort((a, b) => {
+          const ai = RELATION_ORDER.indexOf(a.relationType);
+          const bi = RELATION_ORDER.indexOf(b.relationType);
+          const yearA = a.node.startDate?.year || 9999;
+          const yearB = b.node.startDate?.year || 9999;
+          if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+          return yearA - yearB;
+        })
+        .map(e => ({
+          id: e.node.id,
+          relationType: e.relationType,
+          relationLabel: RELATION_LABEL[e.relationType] || e.relationType,
+          title: e.node.title.english || e.node.title.romaji,
+          imageUrl: e.node.coverImage?.large || e.node.coverImage?.medium,
+          format: e.node.format,
+          score: e.node.averageScore ? (e.node.averageScore / 10).toFixed(1) : null,
+          eps: e.node.episodes,
+          year: e.node.startDate?.year,
+        }));
+
       const fullData = {
         ...baseAnime,
         imageUrl: freshImageUrl,
-        eps: baseAnime.eps || 12,
+        eps: baseAnime.eps || null,
         characters: formattedCharacters,
         trailer: trailerUrl,
-        trailerRaw: trailerData
+        trailerRaw: trailerData,
+        relations: relatedAnime,
       };
  
       setModalData(fullData);
@@ -542,6 +629,56 @@ export default function App() {
     return () => { isMounted = false; };
   }, []);
  
+  // ── 切換到 Calendar 時，批次刷新 watching 番劇的最新集數 & 播出時間 ──────
+  useEffect(() => {
+    if (currentPage !== 'calendar') return;
+    const toRefresh = myPlaylist.filter(a => a.status === LIST_STATUS.WATCHING);
+    if (toRefresh.length === 0) return;
+
+    let cancelled = false;
+
+    const refreshEps = async () => {
+      // 每次最多 50 個 id 一批（AniList 限制）
+      const chunks = [];
+      for (let i = 0; i < toRefresh.length; i += 50) chunks.push(toRefresh.slice(i, i + 50));
+
+      for (const chunk of chunks) {
+        if (cancelled) break;
+        // 用 aliases 批次查詢
+        const fields = chunk.map((a, idx) =>
+          `a${idx}: Media(id: ${a.id}, type: ANIME) { id episodes nextAiringEpisode { airingAt episode } }`
+        ).join('\n');
+        const query = `query { ${fields} }`;
+
+        try {
+          const data = await fetchAniList(query);
+          if (cancelled) break;
+
+          setMyPlaylist(prev => prev.map(item => {
+            const found = Object.values(data).find(m => m.id === item.id);
+            if (!found) return item;
+            const freshEps = found.episodes || null;
+            const freshNextAiringAt = found.nextAiringEpisode?.airingAt || item.nextAiringAt;
+            const freshAiringEpisode = found.nextAiringEpisode?.episode
+              ? found.nextAiringEpisode.episode - 1
+              : item.airingEpisode;
+            return {
+              ...item,
+              eps: freshEps,
+              nextAiringAt: freshNextAiringAt,
+              airingEpisode: freshAiringEpisode,
+            };
+          }));
+        } catch (e) {
+          // 靜默失敗，不影響 UI
+        }
+      }
+    };
+
+    refreshEps();
+    return () => { cancelled = true; };
+  }, [currentPage]);
+
   const showCalendarDot = useMemo(() => {
     const today = new Date();
     const todayY = today.getFullYear(), todayM = today.getMonth(), todayD = today.getDate();
@@ -556,7 +693,7 @@ export default function App() {
           if (d.getFullYear() === todayY && d.getMonth() === todayM && d.getDate() === todayD) {
             const ep = anchorEp + w;
             if (ep < 1) continue;
-            if (anime.eps && ep > anime.eps) continue;
+            if (anime.eps && ep > anime.eps && anime.status !== 'Currently Airing') continue;
             return true;
           }
         }
@@ -868,7 +1005,26 @@ export default function App() {
                       </div>
                     </div>
                   )}
- 
+
+                  {modalData.relations && modalData.relations.length > 0 && (
+                    <div className={`mt-8 border-t pt-8 ${theme === 'dark' ? 'border-[#333]' : 'border-gray-100'}`}>
+                      <h3 className={`text-sm font-bold mb-4 uppercase tracking-wider ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Series</h3>
+                      <div className="flex flex-wrap gap-2">
+                        {modalData.relations.map(rel => (
+                          <button
+                            key={rel.id}
+                            onClick={() => handleOpenModal({ id: rel.id, title: rel.title, imageUrl: rel.imageUrl, format: rel.format, score: rel.score, eps: rel.eps })}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-none border text-[11px] font-bold transition-all group ${theme === 'dark' ? 'border-[#333] text-gray-400 hover:border-white hover:text-white bg-transparent' : 'border-gray-200 text-gray-500 hover:border-black hover:text-black bg-transparent'}`}
+                          >
+                            <span className={`text-[10px] font-mono ${theme === 'dark' ? 'text-gray-600 group-hover:text-gray-400' : 'text-gray-300 group-hover:text-gray-500'}`}>#{rel.relationLabel}</span>
+                            <span className="truncate max-w-[160px]">{rel.title}</span>
+                            {rel.year && <span className={`text-[10px] font-mono shrink-0 ${theme === 'dark' ? 'text-gray-600 group-hover:text-gray-400' : 'text-gray-300 group-hover:text-gray-500'}`}>{rel.year}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {modalData.trailer && (
                     <div className={`mt-8 border-t pt-8 ${theme === 'dark' ? 'border-[#333]' : 'border-gray-100'}`}>
                       <div className="flex justify-between items-center mb-4">
@@ -913,6 +1069,7 @@ export default function App() {
                       )}
                     </div>
                   )}
+
                 </div>
               </>
             )}
@@ -1016,7 +1173,8 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
         if (ts < monthStart || ts > monthEnd) continue;
         const epNum = anchorEp + w;
         if (epNum < 1) continue;
-        if (anime.eps && epNum > anime.eps) continue;
+        // 只有非連載中（Finished Airing）才依 eps 截斷；Currently Airing 繼續往後排
+        if (anime.eps && epNum > anime.eps && anime.status !== 'Currently Airing') continue;
         const d = tsToLocalDate(ts);
         if (d.year === viewYear && d.month === viewMonth) {
           results.push({ day: d.day, epNum, airingTs: ts });
@@ -1129,7 +1287,6 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
                               className={`w-full text-left text-[9px] font-medium px-1.5 py-1 leading-tight truncate transition-colors border-none rounded-none ${theme === 'dark' ? 'bg-[#1a1a1a] text-gray-300 hover:bg-white hover:text-black' : 'bg-gray-100 text-gray-700 hover:bg-black hover:text-white'}`}
                               title={`${anime.title}${epNum ? ` — Ep ${epNum}` : ''}`}
                             >
-                              {epNum && <span className="mr-1 opacity-50">Ep{epNum}</span>}
                               {anime.title}
                             </button>
                           ))}
