@@ -395,6 +395,7 @@ export default function App() {
     );
   };
  
+
   const handleOpenModal = async (baseAnime) => {
     setIsModalOpen(true);
     setIsModalLoading(true);
@@ -408,21 +409,6 @@ export default function App() {
             trailer { id site thumbnail }
             characters(sort: ROLE, perPage: 8) {
               edges { role node { id name { full } image { large } } voiceActors(language: JAPANESE) { name { full } } }
-            }
-            relations {
-              edges {
-                relationType(version: 2)
-                node {
-                  id
-                  type
-                  title { romaji english native }
-                  coverImage { large medium }
-                  format
-                  status
-                  averageScore
-                  episodes
-                }
-              }
             }
           }
         }
@@ -446,77 +432,6 @@ export default function App() {
           trailerUrl = `https://www.dailymotion.com/embed/video/${trailerData.id}`;
         }
       }
- 
-      // 遞迴抓整個系列樹
-      const ANIME_RELATION_TYPES = ['SEQUEL','PREQUEL','PARENT','SIDE_STORY','SPIN_OFF','ALTERNATIVE','COMPILATION'];
-      const fetchRelationsPage = async (id) => {
-        const q = `query($id:Int){Media(id:$id,type:ANIME){id relations{edges{relationType(version:2) node{id type title{romaji english} coverImage{large medium} format averageScore episodes startDate{year}}}}}}`;
-        try {
-          const d = await fetchAniList(q, { id });
-          return d?.Media?.relations?.edges || [];
-        } catch { return []; }
-      };
-
-      // BFS 展開：最多 3 層，最多 40 部，只收 ANIME
-      const visited = new Set([baseAnime.id]);
-      const franchiseMap = new Map(); // id → entry
-      const queue = (charResData.Media?.relations?.edges || [])
-        .filter(e => e.node.type === 'ANIME' && ANIME_RELATION_TYPES.includes(e.relationType));
-
-      queue.forEach(e => {
-        if (!visited.has(e.node.id)) {
-          visited.add(e.node.id);
-          franchiseMap.set(e.node.id, e);
-        }
-      });
-
-      // 再往外展開一層（前傳/續集往外追）
-      if (franchiseMap.size < 40) {
-        const secondQueue = [];
-        for (const e of franchiseMap.values()) {
-          if (['SEQUEL','PREQUEL','PARENT'].includes(e.relationType)) {
-            secondQueue.push(e.node.id);
-          }
-        }
-        await Promise.all(secondQueue.slice(0, 6).map(async (nid) => {
-          const edges = await fetchRelationsPage(nid);
-          edges.filter(e => e.node.type === 'ANIME' && ANIME_RELATION_TYPES.includes(e.relationType)).forEach(e => {
-            if (!visited.has(e.node.id)) {
-              visited.add(e.node.id);
-              franchiseMap.set(e.node.id, e);
-            }
-          });
-        }));
-      }
-
-      const RELATION_LABEL = {
-        SEQUEL: 'Sequel', PREQUEL: 'Prequel', ALTERNATIVE: 'Alternative',
-        SPIN_OFF: 'Spin-off', ADAPTATION: 'Adaptation', PARENT: 'Parent Story',
-        SIDE_STORY: 'Side Story', CHARACTER: 'Character', SUMMARY: 'Summary',
-        OTHER: 'Other', SOURCE: 'Source', COMPILATION: 'Compilation',
-      };
-      const RELATION_ORDER = ['PREQUEL','PARENT','SEQUEL','SIDE_STORY','SPIN_OFF','ALTERNATIVE','COMPILATION','ADAPTATION','OTHER'];
-
-      const relatedAnime = [...franchiseMap.values()]
-        .sort((a, b) => {
-          const ai = RELATION_ORDER.indexOf(a.relationType);
-          const bi = RELATION_ORDER.indexOf(b.relationType);
-          const yearA = a.node.startDate?.year || 9999;
-          const yearB = b.node.startDate?.year || 9999;
-          if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-          return yearA - yearB;
-        })
-        .map(e => ({
-          id: e.node.id,
-          relationType: e.relationType,
-          relationLabel: RELATION_LABEL[e.relationType] || e.relationType,
-          title: e.node.title.english || e.node.title.romaji,
-          imageUrl: e.node.coverImage?.large || e.node.coverImage?.medium,
-          format: e.node.format,
-          score: e.node.averageScore ? (e.node.averageScore / 10).toFixed(1) : null,
-          eps: e.node.episodes,
-          year: e.node.startDate?.year,
-        }));
 
       const fullData = {
         ...baseAnime,
@@ -525,7 +440,6 @@ export default function App() {
         characters: formattedCharacters,
         trailer: trailerUrl,
         trailerRaw: trailerData,
-        relations: relatedAnime,
       };
  
       setModalData(fullData);
@@ -613,7 +527,9 @@ export default function App() {
              }
           });
           
-          const formatted = Array.from(uniqueMap.values()).map(formatAnilistAnime);
+          const formatted = Array.from(uniqueMap.values())
+            .map(formatAnilistAnime)
+            .sort((a, b) => (b.users || 0) - (a.users || 0));
           
           homeSeasonCache = formatted; 
           setAllSeasonAnime(formatted);
@@ -1001,25 +917,6 @@ export default function App() {
                               <p className="text-[10px] text-gray-500 truncate">CV: {char.actorName}</p>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {modalData.relations && modalData.relations.length > 0 && (
-                    <div className={`mt-8 border-t pt-8 ${theme === 'dark' ? 'border-[#333]' : 'border-gray-100'}`}>
-                      <h3 className={`text-sm font-bold mb-4 uppercase tracking-wider ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Series</h3>
-                      <div className="flex flex-wrap gap-2">
-                        {modalData.relations.map(rel => (
-                          <button
-                            key={rel.id}
-                            onClick={() => handleOpenModal({ id: rel.id, title: rel.title, imageUrl: rel.imageUrl, format: rel.format, score: rel.score, eps: rel.eps })}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-none border text-[11px] font-bold transition-all group ${theme === 'dark' ? 'border-[#333] text-gray-400 hover:border-white hover:text-white bg-transparent' : 'border-gray-200 text-gray-500 hover:border-black hover:text-black bg-transparent'}`}
-                          >
-                            <span className={`text-[10px] font-mono ${theme === 'dark' ? 'text-gray-600 group-hover:text-gray-400' : 'text-gray-300 group-hover:text-gray-500'}`}>#{rel.relationLabel}</span>
-                            <span className="truncate max-w-[160px]">{rel.title}</span>
-                            {rel.year && <span className={`text-[10px] font-mono shrink-0 ${theme === 'dark' ? 'text-gray-600 group-hover:text-gray-400' : 'text-gray-300 group-hover:text-gray-500'}`}>{rel.year}</span>}
-                          </button>
                         ))}
                       </div>
                     </div>
