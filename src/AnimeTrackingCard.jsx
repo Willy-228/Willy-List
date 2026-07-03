@@ -1051,8 +1051,10 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
   const isToday = (d) => d && viewYear === today.getFullYear() && viewMonth === today.getMonth() && d === today.getDate();
 
   const tsToLocalDate = (ts) => {
-    const d = new Date(ts * 1000);
-    return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() };
+    // 統一用 JST（+9）換算，與首頁 broadcastDayIndex 計算方式一致
+    const JST_OFFSET = 9 * 3600;
+    const d = new Date((ts + JST_OFFSET) * 1000);
+    return { year: d.getUTCFullYear(), month: d.getUTCMonth(), day: d.getUTCDate() };
   };
 
   const getAiringDatesInMonth = (anime) => {
@@ -1061,8 +1063,9 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
       const anchorEp = (anime.airingEpisode || 0) + 1;
       const anchorTs = anime.nextAiringAt;
       const WEEK = 7 * 24 * 3600;
-      const monthStart = new Date(viewYear, viewMonth, 1).getTime() / 1000;
-      const monthEnd   = new Date(viewYear, viewMonth + 1, 0, 23, 59, 59).getTime() / 1000;
+      const JST_OFFSET = 9 * 3600;
+      const monthStart = Date.UTC(viewYear, viewMonth, 1) / 1000 - JST_OFFSET;
+      const monthEnd   = Date.UTC(viewYear, viewMonth + 1, 0, 23, 59, 59) / 1000 - JST_OFFSET;
       const weeksBack  = Math.ceil((anchorTs - monthStart) / WEEK) + 1;
       const weeksAhead = Math.ceil((monthEnd - anchorTs) / WEEK) + 1;
       for (let w = -weeksBack; w <= weeksAhead; w++) {
@@ -1745,7 +1748,16 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
  
   const sortedList = useMemo(() => {
     let list = [...currentList];
-    if (activeTab === LIST_STATUS.PLANNED || activeTab === LIST_STATUS.COMPLETED) {
+    if (activeTab === LIST_STATUS.WATCHING) {
+      list.sort((a, b) => {
+        const da = a.airDateStr || '';
+        const db = b.airDateStr || '';
+        if (!da && !db) return 0;
+        if (!da) return 1;
+        if (!db) return -1;
+        return db.localeCompare(da); // 最新的在前
+      });
+    } else if (activeTab === LIST_STATUS.PLANNED || activeTab === LIST_STATUS.COMPLETED) {
       list.sort((a, b) => {
         const getScore = (anime) => {
           let year = parseInt(anime.year) || 0;
