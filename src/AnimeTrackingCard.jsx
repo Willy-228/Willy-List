@@ -2137,7 +2137,7 @@ function AvatarUpload({ theme, currentUser }) {
     <div
       className="relative group/av shrink-0 cursor-pointer"
       onClick={() => fileInputRef.current?.click()}
-      title="點擊更換大頭貼"
+      title="點擊更換頭貼"
     >
       <div className={`w-16 h-16 rounded-full overflow-hidden flex items-center justify-center transition-colors duration-300 ring-2 ${theme === 'dark' ? 'ring-white/20 bg-[#333] text-white' : 'ring-black/10 bg-gray-200 text-black'}`}>
         {avatarUrl ? (
