@@ -82,7 +82,26 @@ const fetchAniList = async (query, variables = {}, retries = 3, delay = 1000) =>
   }
   throw new Error("API Fetch Failed");
 };
- 
+
+// ── 統一時區處理：全站一律採用 GMT+8（台灣時間）判斷「今天」與「星期幾」──────
+// 不可再用瀏覽器本地時區（new Date().getDay() 等）或 JST(+9)混用，
+// 否則同一時刻在不同計算方式下會被判斷成不同天，導致 Calendar 紅點錯亂。
+const TW_OFFSET_SEC = 8 * 3600; // GMT+8
+
+// 將「epoch 秒」（不傳參數 = 現在）轉成台灣時間下的年/月/日/星期索引
+// dayIndex: 0=Mon ... 6=Sun（與畫面上 Mon~Sun 的排序一致）
+const getTaipeiParts = (epochSeconds) => {
+  const baseSec = epochSeconds == null ? Math.floor(Date.now() / 1000) : epochSeconds;
+  const d = new Date((baseSec + TW_OFFSET_SEC) * 1000);
+  const jsDay = d.getUTCDay();
+  return {
+    year: d.getUTCFullYear(),
+    month: d.getUTCMonth(),
+    day: d.getUTCDate(),
+    dayIndex: jsDay === 0 ? 6 : jsDay - 1,
+  };
+};
+
 const formatAnilistAnime = (media) => {
   if (!media) return null;
  
@@ -97,9 +116,7 @@ const formatAnilistAnime = (media) => {
   if (forceToOther) {
     bDayIndex = 7;
   } else if (media.nextAiringEpisode?.airingAt) {
-    const jstDate = new Date((media.nextAiringEpisode.airingAt + 32400) * 1000);
-    const jsDay = jstDate.getUTCDay(); 
-    bDayIndex = jsDay === 0 ? 6 : jsDay - 1; 
+    bDayIndex = getTaipeiParts(media.nextAiringEpisode.airingAt).dayIndex;
   } else if (media.status === 'RELEASING') {
     bDayIndex = 7;
   }
@@ -596,8 +613,7 @@ export default function App() {
   }, [currentPage]);
 
   const showCalendarDot = useMemo(() => {
-    const today = new Date();
-    const todayY = today.getFullYear(), todayM = today.getMonth(), todayD = today.getDate();
+    const { year: todayY, month: todayM, day: todayD, dayIndex: todayIdx } = getTaipeiParts();
     const WEEK = 7 * 24 * 3600;
     return myPlaylist.filter(a => a.status === LIST_STATUS.WATCHING).some(anime => {
       if (anime.nextAiringAt) {
@@ -605,8 +621,8 @@ export default function App() {
         const anchorEp = (anime.airingEpisode || 0) + 1;
         for (let w = -52; w <= 52; w++) {
           const ts = anchorTs + w * WEEK;
-          const d = new Date(ts * 1000);
-          if (d.getFullYear() === todayY && d.getMonth() === todayM && d.getDate() === todayD) {
+          const d = getTaipeiParts(ts);
+          if (d.year === todayY && d.month === todayM && d.day === todayD) {
             const ep = anchorEp + w;
             if (ep < 1) continue;
             if (anime.eps && ep > anime.eps && anime.status !== 'Currently Airing') continue;
@@ -614,9 +630,7 @@ export default function App() {
           }
         }
       } else if (anime.broadcastDayIndex >= 0) {
-        const jsDay = today.getDay();
-        const idx = jsDay === 0 ? 6 : jsDay - 1;
-        return idx === anime.broadcastDayIndex;
+        return todayIdx === anime.broadcastDayIndex;
       }
       return false;
     });
@@ -1032,9 +1046,9 @@ function FooterMarquee({ playlist, theme }) {
  
 
 function CalendarView({ myPlaylist, onOpenModal, theme }) {
-  const today = new Date();
-  const [viewYear, setViewYear] = useState(today.getFullYear());
-  const [viewMonth, setViewMonth] = useState(today.getMonth());
+  const todayParts = getTaipeiParts();
+  const [viewYear, setViewYear] = useState(todayParts.year);
+  const [viewMonth, setViewMonth] = useState(todayParts.month);
 
   const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -1048,14 +1062,10 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
     else setViewMonth(m => m + 1);
   };
 
-  const isToday = (d) => d && viewYear === today.getFullYear() && viewMonth === today.getMonth() && d === today.getDate();
+  const isToday = (d) => d && viewYear === todayParts.year && viewMonth === todayParts.month && d === todayParts.day;
 
-  const tsToLocalDate = (ts) => {
-    // 統一用 JST（+9）換算，與首頁 broadcastDayIndex 計算方式一致
-    const JST_OFFSET = 9 * 3600;
-    const d = new Date((ts + JST_OFFSET) * 1000);
-    return { year: d.getUTCFullYear(), month: d.getUTCMonth(), day: d.getUTCDate() };
-  };
+  // 統一用 GMT+8（台灣時間）換算，與首頁 broadcastDayIndex / 紅點計算方式一致
+  const tsToLocalDate = (ts) => getTaipeiParts(ts);
 
   const getAiringDatesInMonth = (anime) => {
     const results = [];
@@ -1063,9 +1073,8 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
       const anchorEp = (anime.airingEpisode || 0) + 1;
       const anchorTs = anime.nextAiringAt;
       const WEEK = 7 * 24 * 3600;
-      const JST_OFFSET = 9 * 3600;
-      const monthStart = Date.UTC(viewYear, viewMonth, 1) / 1000 - JST_OFFSET;
-      const monthEnd   = Date.UTC(viewYear, viewMonth + 1, 0, 23, 59, 59) / 1000 - JST_OFFSET;
+      const monthStart = Date.UTC(viewYear, viewMonth, 1) / 1000 - TW_OFFSET_SEC;
+      const monthEnd   = Date.UTC(viewYear, viewMonth + 1, 0, 23, 59, 59) / 1000 - TW_OFFSET_SEC;
       const weeksBack  = Math.ceil((anchorTs - monthStart) / WEEK) + 1;
       const weeksAhead = Math.ceil((monthEnd - anchorTs) / WEEK) + 1;
       for (let w = -weeksBack; w <= weeksAhead; w++) {
@@ -1138,7 +1147,7 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
               <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7"/></svg>
             </button>
             <button
-              onClick={() => { setViewYear(today.getFullYear()); setViewMonth(today.getMonth()); }}
+              onClick={() => { setViewYear(todayParts.year); setViewMonth(todayParts.month); }}
               className={`text-[11px] font-mono px-3 py-1 border transition-colors ${theme === 'dark' ? 'border-[#333] text-gray-400 hover:text-white hover:border-white' : 'border-gray-200 text-gray-400 hover:text-black hover:border-black'}`}
             >
               Today
@@ -1212,8 +1221,7 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
 
  
 function HomeView({ allSeasonAnime, currentSeasonInfo, onAdd, onOpenModal, isLoading, setCurrentPage, theme, myPlaylist }) {
-  const currentJS = new Date().getDay(); 
-  const currentDayIndex = currentJS === 0 ? 6 : currentJS - 1; 
+  const currentDayIndex = getTaipeiParts().dayIndex; 
   const [activeTab, setActiveTab] = useState(currentDayIndex);
   
   const [itemsPerRow, setItemsPerRow] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1920 ? 4 : 3);
