@@ -10,6 +10,7 @@ import anilistLogoWhite from './assets/AniList_logo white.svg';
 import anilistLogo from './assets/AniList_logo.svg.png';
 import keyframeIcon from './assets/keyframe.png';
 import userIcon from './assets/user.png';
+import openBookIcon from './assets/open-book.png';
  
 const LIST_STATUS = {
   WATCHING: 'watching',    
@@ -44,6 +45,10 @@ const GENRE_MAP = {
 const UI_GENRES = ['All', 'Action', 'Adventure', 'Comedy', 'Drama', 'Ecchi', 'Fantasy', 'Horror', 'Mahou Shoujo', 'Mecha', 'Music', 'Mystery', 'Psychological', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports', 'Supernatural', 'Thriller'];
 const UI_YEARS = ['All', ...Array.from({length: 26}, (_, i) => (2026 - i).toString()), '2000以前'];
 const UI_SEASONS = ['All', 'Winter', 'Spring', 'Summer', 'Fall'];
+ 
+// 漫畫頁面用的國家篩選（不含中國、台灣）
+const COUNTRY_MAP = { 'Japan': 'JP', 'Korea': 'KR' };
+const UI_COUNTRIES = ['All', 'Japan', 'Korea'];
  
 const translateGenre = (enGenre) => GENRE_MAP[enGenre] || enGenre;
  
@@ -101,6 +106,18 @@ const getTaipeiParts = (epochSeconds) => {
     dayIndex: jsDay === 0 ? 6 : jsDay - 1,
   };
 };
+
+// 日曆 icon：中間顯示今天的日期數字（以台灣時間為準）
+function CalendarIconWithDate({ className }) {
+  const today = getTaipeiParts().day;
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="2"/>
+      <path d="M8 3v4M16 3v4M3 10h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+      <text x="12" y="18.5" textAnchor="middle" fontSize={today >= 10 ? "8.5" : "10"} fontWeight="700" fill="currentColor" stroke="none" fontFamily="sans-serif">{today}</text>
+    </svg>
+  );
+}
 
 const formatAnilistAnime = (media) => {
   if (!media) return null;
@@ -164,6 +181,59 @@ const formatAnilistAnime = (media) => {
   };
 };
  
+const formatAnilistManga = (media) => {
+  if (!media) return null;
+
+  const isAdultContent = media.isAdult || (media.genres && media.genres.includes('Hentai'));
+
+  const formattedScore = media.meanScore ? (media.meanScore / 10).toFixed(1) : 'N/A';
+
+  let mapStatus = 'Unknown';
+  let statusKey = 'Unknown';
+  if (media.status === 'RELEASING') { mapStatus = 'Publishing'; statusKey = 'Currently Airing'; }
+  else if (media.status === 'FINISHED') { mapStatus = 'Finished'; statusKey = 'Finished Airing'; }
+  else if (media.status === 'NOT_YET_RELEASED') { mapStatus = 'Upcoming'; statusKey = 'Upcoming'; }
+  else if (media.status === 'HIATUS') { mapStatus = 'Hiatus'; statusKey = 'Unknown'; }
+  else if (media.status === 'CANCELLED') { mapStatus = 'Cancelled'; statusKey = 'Unknown'; }
+
+  const cleanSynopsis = media.description?.replace(/<[^>]*>?/gm, '') || '暫無劇情簡介。';
+
+  let airDateStr = '';
+  if (media.startDate?.year) {
+      airDateStr = `${media.startDate.year}-${String(media.startDate.month || 1).padStart(2,'0')}-${String(media.startDate.day || 1).padStart(2,'0')}`;
+  }
+  const seasonStr = media.season ? media.season.charAt(0).toUpperCase() + media.season.slice(1).toLowerCase() : '';
+
+  let mappedFormat = media.format || 'MANGA';
+  if (mappedFormat === 'ONE_SHOT') mappedFormat = 'One Shot';
+  else if (mappedFormat === 'NOVEL') mappedFormat = 'Novel';
+  else if (mappedFormat === 'MANGA') mappedFormat = 'Manga';
+
+  return {
+    id: media.id,
+    title: media.title.native || media.title.romaji || media.title.english,
+    originalName: media.title.english || media.title.romaji,
+    imageUrl: media.coverImage?.extraLarge || media.coverImage?.large || media.coverImage?.medium || '',
+    score: formattedScore,
+    users: media.popularity || 0,
+    rank: '--',
+    eps: media.chapters || null,
+    status: mapStatus,
+    statusKey: statusKey,
+    format: mappedFormat,
+    tags: media.genres || [],
+    year: media.seasonYear || media.startDate?.year || '',
+    season: seasonStr,
+    broadcastDayIndex: 7,
+    synopsis: cleanSynopsis,
+    airDateStr: airDateStr,
+    isAdultContent: isAdultContent,
+    nextAiringAt: null,
+    airingEpisode: null,
+    isManga: true,
+  };
+};
+
 export default function App() {
   const [theme, setTheme] = useState(() => {
     try {
@@ -206,7 +276,7 @@ export default function App() {
   const [currentPage, _setCurrentPage] = useState(() => {
     try {
       const hash = window.location.hash.replace('#', '');
-      return ['home', 'anime', 'profile', 'calendar'].includes(hash) ? hash : 'home';
+      return ['home', 'anime', 'manga', 'profile', 'profile-manga', 'calendar'].includes(hash) ? hash : 'home';
     } catch (e) {
       return 'home';
     }
@@ -310,13 +380,13 @@ export default function App() {
       try {
         setIsModalOpen(false); 
         if (e.state && e.state.page) {
-          if (['home', 'anime', 'profile', 'calendar'].includes(e.state.page)) {
+          if (['home', 'anime', 'manga', 'profile', 'profile-manga', 'calendar'].includes(e.state.page)) {
             _setCurrentPage(e.state.page);
             return;
           }
         }
         const hash = window.location.hash.replace('#', '');
-        if (['home', 'anime', 'profile', 'calendar'].includes(hash)) {
+        if (['home', 'anime', 'manga', 'profile', 'profile-manga', 'calendar'].includes(hash)) {
           _setCurrentPage(hash);
         }
       } catch (error) {}
@@ -413,14 +483,14 @@ export default function App() {
   };
  
 
-  const handleOpenModal = async (baseAnime) => {
+  const handleOpenModal = async (baseAnime, mediaType = 'ANIME') => {
     setIsModalOpen(true);
     setIsModalLoading(true);
     setIsDropdownOpen(false); 
     try {
       const query = `
-        query($id: Int) {
-          Media(id: $id, type: ANIME) {
+        query($id: Int, $type: MediaType) {
+          Media(id: $id, type: $type) {
             id 
             coverImage { extraLarge large medium }
             trailer { id site thumbnail }
@@ -430,7 +500,7 @@ export default function App() {
           }
         }
       `;
-      const charResData = await fetchAniList(query, { id: baseAnime.id });
+      const charResData = await fetchAniList(query, { id: baseAnime.id, type: mediaType });
       const freshImageUrl = charResData.Media?.coverImage?.extraLarge || charResData.Media?.coverImage?.large || charResData.Media?.coverImage?.medium || baseAnime.imageUrl;
       
       const formattedCharacters = (charResData.Media?.characters?.edges || []).map(c => ({
@@ -658,7 +728,7 @@ export default function App() {
         <div className="flex-1 flex justify-end items-center px-8 md:pr-12 lg:pr-24 min-[1920px]:pr-[280px]">
           <div className={`hidden md:flex items-center gap-8 lg:gap-12 font-bold text-sm ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
             <button onClick={() => setCurrentPage('calendar')} className={`relative flex items-center transition-colors border-none bg-transparent hover:opacity-70 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
-              <svg className="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              <CalendarIconWithDate className="w-3.5 h-3.5 mr-1.5" />
               Calendar
               {showCalendarDot && (
                 <span className="absolute -top-1 -right-2 w-1.5 h-1.5 rounded-full bg-[#F75C2F]" />
@@ -668,10 +738,34 @@ export default function App() {
               <img src={keyframeIcon} alt="anime" className={`w-3.5 h-3.5 mr-1.5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
               Anime
             </button>
-            <button onClick={() => { if (!currentUser) setShowAuth(true); else setCurrentPage('profile'); }} className={`flex items-center transition-colors border-none bg-transparent hover:opacity-70 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
-              <img src={userIcon} alt="profile" className={`w-3 h-3 mr-1.5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
-              My Profile
+            <button onClick={() => setCurrentPage('manga')} className={`flex items-center transition-colors border-none bg-transparent hover:opacity-70 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+              <img src={openBookIcon} alt="manga" className={`w-3.5 h-3.5 mr-1.5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
+              Manga
             </button>
+            <div className="relative group/profile">
+              <button onClick={() => { if (!currentUser) setShowAuth(true); else setCurrentPage('profile'); }} className={`flex items-center transition-colors border-none bg-transparent hover:opacity-70 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+                <img src={userIcon} alt="profile" className={`w-3 h-3 mr-1.5 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
+                My Profile
+              </button>
+              <div className="absolute top-full left-0 pt-3 hidden group-hover/profile:block z-50">
+                <div className={`min-w-[140px] py-1 shadow-xl border transition-colors duration-300 ${theme === 'dark' ? 'bg-[#141414] border-[#222]' : 'bg-white border-gray-100'}`}>
+                  <button
+                    onClick={() => { if (!currentUser) setShowAuth(true); else setCurrentPage('profile'); }}
+                    className={`w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-left transition-colors border-none bg-transparent whitespace-nowrap ${currentPage === 'profile' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-black')}`}
+                  >
+                    <img src={keyframeIcon} alt="anime" className={`w-3 h-3 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
+                    Anime
+                  </button>
+                  <button
+                    onClick={() => { if (!currentUser) setShowAuth(true); else setCurrentPage('profile-manga'); }}
+                    className={`w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-left transition-colors border-none bg-transparent whitespace-nowrap ${currentPage === 'profile-manga' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-black')}`}
+                  >
+                    <img src={openBookIcon} alt="manga" className={`w-3 h-3 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
+                    Manga
+                  </button>
+                </div>
+              </div>
+            </div>
 
             <button 
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -697,7 +791,7 @@ export default function App() {
             <input
               ref={searchInputRef}
               type="text"
-              placeholder="Search for Anime..."
+              placeholder={currentPage === 'manga' ? 'Search for Manga...' : 'Search for Anime...'}
               value={searchQuery}
               onChange={(e) => handleSearchChange(e.target.value)}
               onFocus={() => setShowSearchDrop(true)}
@@ -766,6 +860,15 @@ export default function App() {
             myPlaylist={myPlaylist}
           />
         )}
+
+        {currentPage === 'manga' && (
+          <MangaCatalogView
+            searchQuery={searchQuery}
+            onAdd={handleAddToList} onOpenModal={(m) => handleOpenModal(m, 'MANGA')}
+            theme={theme}
+            myPlaylist={myPlaylist}
+          />
+        )}
  
         {currentPage === 'profile' && (
           <ProfileView 
@@ -775,6 +878,19 @@ export default function App() {
             currentUser={currentUser}
             onShowAuth={() => setShowAuth(true)}
             onLogout={handleLogout}
+            mediaFilter="anime"
+          />
+        )}
+
+        {currentPage === 'profile-manga' && (
+          <ProfileView 
+            playlist={myPlaylist} onUpdateProgress={handleUpdateProgress}
+            onChangeStatus={handleChangeStatus} onRemove={handleRemoveFromList} onOpenModal={handleOpenModal}
+            theme={theme}
+            currentUser={currentUser}
+            onShowAuth={() => setShowAuth(true)}
+            onLogout={handleLogout}
+            mediaFilter="manga"
           />
         )}
  
@@ -1139,7 +1255,8 @@ function CalendarView({ myPlaylist, onOpenModal, theme }) {
 
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
-          <h1 className={`text-3xl fascinate-regular transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+          <h1 className={`text-3xl fascinate-regular transition-colors duration-300 flex items-center gap-3 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+            <CalendarIconWithDate className="w-7 h-7 shrink-0" />
             {MONTH_NAMES[viewMonth]} {viewYear}
           </h1>
           <div className="flex items-center gap-3">
@@ -1423,19 +1540,21 @@ function AnimeCardHorizontal({ anime, onClick, onAdd, theme, myPlaylist }) {
     : (anime.year ? anime.year : (anime.airDateStr ? anime.airDateStr.split('-')[0] : ''));
  
   const isAlreadyInList = myPlaylist.some(item => item.id === anime.id);
+  const statusColorKey = anime.statusKey || anime.status;
+  const epsUnitLabel = anime.isManga ? 'ch' : 'eps';
  
   return (
     <div className={`flex gap-4 p-3 cursor-pointer relative group transition-all hover:shadow-lg rounded-2xl border w-full h-full ${theme === 'dark' ? 'bg-[#141414] border-transparent hover:border-[#333]' : 'bg-white border-transparent hover:border-gray-100'}`} onClick={onClick}>
       <img src={anime.imageUrl} alt={anime.title} className={`w-[85px] h-[125px] object-cover rounded-[12px] shrink-0 shadow-sm transition-transform group-hover:scale-[1.02] ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-100'}`} />
       <div className="flex flex-col flex-1 py-1 min-w-0">
         
-        <div className={`text-[10px] font-bold mb-1 tracking-wide ${anime.status === 'Currently Airing' ? (theme === 'dark' ? 'text-[#dbe6ff]' : 'text-[#dfe9ff]') : (anime.status === 'Finished Airing' ? 'text-[#BDC0BA]' : (anime.status === 'Upcoming' ? 'text-[#E8F5BD]' : (theme === 'dark' ? 'text-gray-600' : 'text-gray-400')))}`}>
+        <div className={`text-[10px] font-bold mb-1 tracking-wide ${statusColorKey === 'Currently Airing' ? (theme === 'dark' ? 'text-[#dbe6ff]' : 'text-[#dfe9ff]') : (statusColorKey === 'Finished Airing' ? 'text-[#BDC0BA]' : (statusColorKey === 'Upcoming' ? 'text-[#E8F5BD]' : (theme === 'dark' ? 'text-gray-600' : 'text-gray-400')))}`}>
           {anime.status}
         </div>
         
         <div className={`text-[11px] font-bold mb-1 flex items-center gap-2 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
           {displayDate && <span>{displayDate}</span>}
-          {anime.eps && <span>• {anime.eps} eps</span>}
+          {anime.eps && <span>• {anime.eps} {epsUnitLabel}</span>}
         </div>
         
         <h3 className={`text-[14px] font-bold leading-tight line-clamp-2 pr-2 mb-2 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
@@ -1589,8 +1708,9 @@ function CatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
   return (
     <div className={`h-full overflow-y-auto px-6 lg:px-16 py-10 pb-24 scrollbar-hide transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
       <div className="max-w-[1600px] mx-auto">
-        <h1 className={`text-3xl mb-6 fascinate-regular transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
-          Explore
+        <h1 className={`text-3xl mb-6 fascinate-regular transition-colors duration-300 flex items-center gap-3 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+          <img src={keyframeIcon} alt="anime" className={`w-7 h-7 object-contain shrink-0 transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
+          Anime
           {searchQuery && <span className={`text-lg font-sans ml-4 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>/ Search: "{searchQuery}"</span>}
         </h1>
 
@@ -1724,7 +1844,260 @@ function CatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
   );
 }
  
-function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onOpenModal, theme, currentUser, onShowAuth, onLogout }) {
+function MangaCatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
+  const FORMATS = [
+    { id: 'All', label: 'All' },
+    { id: 'MANGA', label: 'MANGA' },
+    { id: 'NOVEL', label: 'NOVEL' },
+    { id: 'ONE_SHOT', label: 'ONE SHOT' }
+  ];
+  
+  const [activeFormat, setActiveFormat] = useState('All'); 
+  const [activeGenre, setActiveGenre] = useState('All');
+  const [activeSort, setActiveSort] = useState('SCORE_DESC');
+  const [activeYear, setActiveYear] = useState('All');
+  const [activeCountry, setActiveCountry] = useState('All');
+  const [activeStatus, setActiveStatus] = useState('All');
+
+
+  
+  const [data, setData] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [apiError, setApiError] = useState(null);
+ 
+  useEffect(() => { setCurrentPage(1); }, [searchQuery, activeGenre, activeSort, activeYear, activeCountry, activeFormat, activeStatus]);
+ 
+  useEffect(() => {
+    let isMounted = true;
+    const fetchFilteredData = async () => {
+      setIsLoading(true);
+      setApiError(null);
+      
+      const cacheKey = JSON.stringify({ mediaType: 'MANGA', searchQuery, activeFormat, activeGenre, activeSort, activeYear, activeCountry, activeStatus, currentPage });
+      
+      if (globalApiCache.has(cacheKey)) {
+          const cachedData = globalApiCache.get(cacheKey);
+          if (isMounted) {
+            setData(cachedData.formatted);
+            setTotalPages(cachedData.totalPages);
+            setIsLoading(false);
+          }
+          return;
+      }
+ 
+      try {
+        let variables = { page: currentPage, sort: [activeSort] };
+        
+        if (searchQuery) variables.search = searchQuery;
+        if (activeFormat !== 'All') variables.format = activeFormat;
+        
+        if (activeGenre !== 'All') {
+          variables.genre = activeGenre;
+        }
+
+        if (activeCountry !== 'All') {
+          variables.countryOfOrigin = COUNTRY_MAP[activeCountry];
+        }
+        
+        if (activeYear !== 'All') {
+          if (activeYear === '2000以前') {
+             variables.startDateLesser = 20010000;
+             variables.startDateGreater = 10000000; 
+          } else {
+             const y = parseInt(activeYear);
+             // 漫畫大多沒有 seasonYear，改用 startDate 區間判斷年份
+             variables.startDateGreater = y * 10000;
+             variables.startDateLesser = (y + 1) * 10000;
+          }
+        }
+        
+        if (activeStatus !== 'All') {
+            if (activeStatus === 'RELEASING') variables.status = 'RELEASING';
+            else if (activeStatus === 'FINISHED') variables.status = 'FINISHED';
+            else if (activeStatus === 'HIATUS') variables.status = 'HIATUS';
+        }
+
+        const query = `
+          query($page: Int, $search: String, $format: MediaFormat, $genre: String, $status: MediaStatus, $countryOfOrigin: CountryCode, $startDateGreater: FuzzyDateInt, $startDateLesser: FuzzyDateInt, $sort: [MediaSort]) {
+            Page(page: $page, perPage: 40) {
+              pageInfo { lastPage }
+              media(search: $search, format: $format, genre: $genre, status: $status, countryOfOrigin: $countryOfOrigin, startDate_greater: $startDateGreater, startDate_lesser: $startDateLesser, type: MANGA, sort: $sort, isAdult: false) {
+                id title { romaji english native } coverImage { extraLarge large } meanScore popularity chapters volumes status format genres season seasonYear description startDate { year month day } isAdult countryOfOrigin
+              }
+            }
+          }
+        `;
+ 
+        const resData = await fetchAniList(query, variables);
+        
+        if (isMounted && resData.Page) {
+          const formatted = (resData.Page.media || []).map(formatAnilistManga);
+          const totalP = resData.Page.pageInfo?.lastPage || 1;
+          
+          globalApiCache.set(cacheKey, { formatted, totalPages: totalP });
+          
+          setData(formatted);
+          setTotalPages(totalP);
+        }
+      } catch (error) {
+        console.error(error);
+        if(isMounted) {
+            setData([]);
+            setApiError(error.message.includes('Client Error') ? "沒有找到符合條件的漫畫。" : "系統發生錯誤，請稍後再試。");
+        }
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+    
+    const timeoutId = setTimeout(fetchFilteredData, 400);
+    return () => { isMounted = false; clearTimeout(timeoutId); };
+  }, [searchQuery, activeGenre, activeSort, activeYear, activeCountry, activeFormat, activeStatus, currentPage]);
+ 
+  const hasNextPage = currentPage < totalPages;
+ 
+  return (
+    <div className={`h-full overflow-y-auto px-6 lg:px-16 py-10 pb-24 scrollbar-hide transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+      <div className="max-w-[1600px] mx-auto">
+        <h1 className={`text-3xl mb-6 fascinate-regular transition-colors duration-300 flex items-center gap-3 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+          <img src={openBookIcon} alt="manga" className={`w-7 h-7 object-contain shrink-0 transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
+          Manga
+          {searchQuery && <span className={`text-lg font-sans ml-4 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>/ Search: "{searchQuery}"</span>}
+        </h1>
+
+
+        
+        <div className="flex flex-col mb-10">
+          <div className="flex flex-col gap-6 w-full">
+
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Country</span>
+              <div className="flex gap-2 w-max">
+                {UI_COUNTRIES.map(c => (
+                  <button 
+                    key={`country-${c}`} 
+                    onClick={() => { setActiveCountry(c); setCurrentPage(1); }} 
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeCountry === c ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}>
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Format</span>
+              <div className="flex gap-2 w-max">
+                {FORMATS.map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => { setActiveFormat(f.id); setCurrentPage(1); }}
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeFormat === f.id ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Status</span>
+              <div className="flex gap-2 w-max">
+                {['All', 'RELEASING', 'FINISHED', 'HIATUS'].map(s => (
+                  <button 
+                    key={`status-${s}`} 
+                    onClick={() => { setActiveStatus(s); setCurrentPage(1); }} 
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeStatus === s ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}>
+                    {s === 'All' ? 'All' : s === 'RELEASING' ? 'Publishing' : s === 'FINISHED' ? 'Finished' : 'Hiatus'}
+                  </button>
+                ))}
+              </div>
+            </div>
+ 
+ 
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Genre</span>
+              <div className="flex gap-2 w-max">
+                {UI_GENRES.map(g => (
+                  <button 
+                    key={`genre-${g}`} 
+                    onClick={() => { setActiveGenre(g); setCurrentPage(1); }} 
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeGenre === g ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}>
+                    {translateGenre(g) || g}
+                  </button>
+                ))}
+              </div>
+            </div>
+ 
+            <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide">
+              <span className={`text-xs font-bold uppercase tracking-wider shrink-0 w-12 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>Year</span>
+              <div className="flex gap-2 w-max">
+                {UI_YEARS.map(y => (
+                  <button 
+                    key={`year-${y}`} 
+                    onClick={() => { 
+                      setActiveYear(y); 
+                      setCurrentPage(1);
+                    }} 
+                    className={`shrink-0 px-4 py-1.5 rounded-none border-none text-xs font-bold transition-all whitespace-nowrap ${activeYear === y ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : `${theme === 'dark' ? 'bg-[#1a1a1a] hover:bg-[#333]' : 'bg-gray-100 hover:bg-gray-200'} text-gray-500`}`}>
+                    {y}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex justify-end pt-6 mt-4">
+            <div className="flex items-center gap-3 shrink-0">
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Sort by</span>
+              <button onClick={() => { setActiveSort('SCORE_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'SCORE_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Rated</button>
+              <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
+              <button onClick={() => { setActiveSort('POPULARITY_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'POPULARITY_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Trends</button>
+              <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
+              <button onClick={() => { setActiveSort('START_DATE_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'START_DATE_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Latest</button>
+            </div>
+          </div>
+        </div>
+ 
+        {isLoading ? (
+          <div className={`text-center py-32 font-mono text-sm flex flex-col items-center ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+            <svg className={`animate-spin h-6 w-6 mb-4 ${theme === 'dark' ? 'text-white' : 'text-black'}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            Querying AniList GraphQL API...
+          </div>
+        ) : apiError ? (
+          <div className={`text-center py-32 border border-dashed rounded-none text-sm transition-colors duration-300 ${theme === 'dark' ? 'bg-[#111] border-[#222] text-gray-500' : 'bg-gray-50 border-gray-100 text-gray-400'}`}>
+            {apiError}
+          </div>
+        ) : data.length === 0 ? (
+          <div className={`text-center py-32 border border-dashed rounded-none text-sm transition-colors duration-300 ${theme === 'dark' ? 'bg-[#111] border-[#222] text-gray-500' : 'bg-gray-50 border-gray-100 text-gray-400'}`}>
+            找不到符合條件的漫畫，請嘗試其他篩選組合。
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10 w-full mx-auto">
+              {data.map((manga) => (
+                <div key={`manga-cat-${manga.id}`} className="w-full">
+                  <AnimeCardHorizontal anime={manga} onAdd={() => onAdd(manga, LIST_STATUS.PLANNED)} onClick={() => onOpenModal(manga)} theme={theme} myPlaylist={myPlaylist} />
+                </div>
+              ))}
+            </div>
+            
+            <div className={`flex justify-center items-center gap-4 pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
+              <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>PREV</button>
+              <span className={`text-sm font-mono font-bold px-4 py-1.5 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
+                {currentPage === totalPages ? `Page ${currentPage} / ${totalPages}` : `Page ${currentPage}`}
+              </span>
+              <button onClick={() => setCurrentPage(p => p + 1)} disabled={!hasNextPage} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>NEXT</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onOpenModal, theme, currentUser, onShowAuth, onLogout, mediaFilter = 'anime' }) {
   const [activeTab, setActiveTab] = useState(LIST_STATUS.WATCHING);
   const [sortOrder, setSortOrder] = useState('newest'); 
   const [activeFormat, setActiveFormat] = useState('All'); 
@@ -1732,21 +2105,29 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
   // 【新增】分頁狀態與參數設定
   const [profilePage, setProfilePage] = useState(1);
   const ITEMS_PER_PAGE = 60;
+
+  const isManga = mediaFilter === 'manga';
+
+  // 依照 Anime / Manga 分頁範圍過濾清單
+  const scopedPlaylist = useMemo(
+    () => playlist.filter(item => (isManga ? !!item.isManga : !item.isManga)),
+    [playlist, isManga]
+  );
  
   const tabs = [
-    { id: LIST_STATUS.WATCHING, label: 'Watching' },
-    { id: LIST_STATUS.PLANNED, label: 'Plan to Watch' },
+    { id: LIST_STATUS.WATCHING, label: isManga ? 'Reading' : 'Watching' },
+    { id: LIST_STATUS.PLANNED, label: isManga ? 'Plan to Read' : 'Plan to Watch' },
     { id: LIST_STATUS.COMPLETED, label: 'Completed' }
   ];
   
-  const FORMATS = ['All', 'TV', 'ONA', 'MOVIE'];
+  const FORMATS = isManga ? ['All', 'Manga', 'Novel', 'One Shot'] : ['All', 'TV', 'ONA', 'MOVIE'];
 
   // 當切換篩選條件或排序時，重置回到第一頁
   useEffect(() => {
     setProfilePage(1);
   }, [activeTab, sortOrder, activeFormat]);
  
-  const currentList = playlist.filter(item => {
+  const currentList = scopedPlaylist.filter(item => {
     if (activeTab === LIST_STATUS.WATCHING) {
       return item.status === activeTab;
     } else {
@@ -1810,13 +2191,14 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
           <div className="w-full max-w-[1600px] mx-auto flex items-center gap-5">
             <AvatarUpload theme={theme} currentUser={currentUser} />
             <div>
-              <h1 className={`text-3xl mb-1 fascinate-regular ${hasBanner ? 'text-white drop-shadow-sm' : (theme === 'dark' ? 'text-white' : 'text-black')}`}>
-                {currentUser ? currentUser + "'s List" : 'My Profile'}
+              <h1 className={`text-3xl mb-1 fascinate-regular flex items-center gap-2.5 ${hasBanner ? 'text-white drop-shadow-sm' : (theme === 'dark' ? 'text-white' : 'text-black')}`}>
+                <img src={isManga ? openBookIcon : keyframeIcon} alt={isManga ? 'manga' : 'anime'} className={`w-6 h-6 object-contain shrink-0 transition-all duration-300 ${(theme === 'dark' || hasBanner) ? 'invert' : ''}`} />
+                {currentUser ? currentUser + `'s ${isManga ? 'Manga' : 'Anime'} List` : 'My Profile'}
               </h1>
               {currentUser ? (
                 <div className="flex items-center gap-4">
                   <p className={`text-[11px] ${hasBanner ? 'text-white/70' : (theme === 'dark' ? 'text-gray-500' : 'text-gray-400')}`}>
-                    Tracked: {playlist.length} | Completed: {playlist.filter(i => i.status === LIST_STATUS.COMPLETED).length}
+                    Tracked: {scopedPlaylist.length} | Completed: {scopedPlaylist.filter(i => i.status === LIST_STATUS.COMPLETED).length}
                   </p>
                   <button onClick={onLogout} className={`text-[11px] font-bold border-none bg-transparent p-0 cursor-pointer transition-colors ${hasBanner ? 'text-white/50 hover:text-white' : (theme === 'dark' ? 'text-gray-600 hover:text-white' : 'text-gray-300 hover:text-black')}`}>Sign Out</button>
                 </div>
@@ -1839,7 +2221,7 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
               <button key={tab.id} onClick={() => { setActiveTab(tab.id); setActiveFormat('All'); }} className={`pb-2 text-sm font-bold transition-colors border-none bg-transparent relative shrink-0 ${activeTab === tab.id ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black')}`}>
                 {tab.label}
                 <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-none transition-colors duration-300 ${activeTab === tab.id ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : (theme === 'dark' ? 'bg-[#1a1a1a] text-gray-400' : 'bg-gray-100 text-gray-500')}`}>
-                    {activeTab === LIST_STATUS.WATCHING ? playlist.filter(i => i.status === tab.id).length : playlist.filter(i => i.status === tab.id && (activeFormat === 'All' || i.format === activeFormat)).length}
+                    {activeTab === LIST_STATUS.WATCHING ? scopedPlaylist.filter(i => i.status === tab.id).length : scopedPlaylist.filter(i => i.status === tab.id && (activeFormat === 'All' || i.format === activeFormat)).length}
                 </span>
                 {activeTab === tab.id && <div className={`absolute -bottom-2 left-0 w-full h-0.5 transition-colors duration-300 ${theme === 'dark' ? 'bg-white' : 'bg-black'}`}></div>}
               </button>
@@ -1883,7 +2265,7 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
    
                  return (
                   <div key={`profile-${anime.id}`} className={`p-4 flex gap-4 relative group transition-all border rounded-2xl ${theme === 'dark' ? 'bg-[#141414] border-transparent hover:border-[#333]' : 'bg-white border-gray-50 hover:border-gray-200'}`}>
-                    <img src={anime.imageUrl} alt="poster" className={`w-[90px] h-[130px] object-cover rounded-[12px] cursor-pointer shrink-0 shadow-sm hover:scale-[1.02] transition-transform ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-100'}`} onClick={() => onOpenModal(anime)} />
+                    <img src={anime.imageUrl} alt="poster" className={`w-[90px] h-[130px] object-cover rounded-[12px] cursor-pointer shrink-0 shadow-sm hover:scale-[1.02] transition-transform ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-100'}`} onClick={() => onOpenModal(anime, anime.isManga ? 'MANGA' : 'ANIME')} />
                     <div className="flex-1 flex flex-col min-w-0">
                       
                       {!isWatching && (
@@ -1892,10 +2274,10 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
                         </div>
                       )}
                       
-                      <h3 className={`font-bold text-[14px] truncate cursor-pointer hover:underline ${!isWatching ? 'mb-2' : 'mb-1'} ${theme === 'dark' ? 'text-white' : 'text-black'}`} onClick={() => onOpenModal(anime)}>{anime.title}</h3>
+                      <h3 className={`font-bold text-[14px] truncate cursor-pointer hover:underline ${!isWatching ? 'mb-2' : 'mb-1'} ${theme === 'dark' ? 'text-white' : 'text-black'}`} onClick={() => onOpenModal(anime, anime.isManga ? 'MANGA' : 'ANIME')}>{anime.title}</h3>
                       
                       {isWatching ? (
-                        <p className={`text-[10px] mb-4 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Total: {anime.eps || '?'} eps</p>
+                        <p className={`text-[10px] mb-4 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Total: {anime.eps || '?'} {isManga ? 'ch' : 'eps'}</p>
                       ) : (
                         <div className={`text-[11px] font-bold mb-1 flex items-center gap-2 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
                           {anime.season || anime.year ? <span>{anime.season} {anime.year}</span> : null}
@@ -1921,11 +2303,11 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
                         
                         <div className={`flex justify-end gap-1.5 ${!isWatching ? 'mt-auto' : 'mt-2'}`}>
                           {isWatching && (
-                            <button onClick={() => onUpdateProgress(anime.id, anime.watched + 1)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>1 EP</button>
+                            <button onClick={() => onUpdateProgress(anime.id, anime.watched + 1)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>{isManga ? '1 CH' : '1 EP'}</button>
                           )}
                           {anime.status === LIST_STATUS.PLANNED && (
                             <>
-                              <button onClick={() => onChangeStatus(anime.id, LIST_STATUS.WATCHING)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>Watching</button>
+                              <button onClick={() => onChangeStatus(anime.id, LIST_STATUS.WATCHING)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>{isManga ? 'Reading' : 'Watching'}</button>
                               <button onClick={() => onChangeStatus(anime.id, LIST_STATUS.COMPLETED)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>Completed</button>
                             </>
                           )}
