@@ -138,7 +138,7 @@ const formatAnilistAnime = (media) => {
     bDayIndex = 7;
   }
  
-  const formattedScore = media.meanScore ? (media.meanScore / 10).toFixed(1) : 'N/A';
+  const formattedScore = media.averageScore ? (media.averageScore / 10).toFixed(1) : 'N/A';
   
   let mapStatus = 'Unknown';
   if (media.status === 'RELEASING') mapStatus = 'Currently Airing';
@@ -186,7 +186,7 @@ const formatAnilistManga = (media) => {
 
   const isAdultContent = media.isAdult || (media.genres && media.genres.includes('Hentai'));
 
-  const formattedScore = media.meanScore ? (media.meanScore / 10).toFixed(1) : 'N/A';
+  const formattedScore = media.averageScore ? (media.averageScore / 10).toFixed(1) : 'N/A';
 
   let mapStatus = 'Unknown';
   let statusKey = 'Unknown';
@@ -461,9 +461,34 @@ export default function App() {
   const handleChangeStatus = (animeId, newStatus) => {
     setMyPlaylist(prevList => prevList.map(anime => anime.id === animeId ? { ...anime, status: newStatus } : anime));
   };
+
+  // 【新增】收藏功能：與目前的 status（Reading/Plan to Read/Completed）互不衝突，可同時存在
+  // 若取消收藏時該項目已經沒有任何進度狀態，代表清單上不需要再保留，直接整筆刪除
+  const handleToggleCollect = (animeId) => {
+    setMyPlaylist(prevList => prevList.reduce((acc, anime) => {
+      if (anime.id !== animeId) { acc.push(anime); return acc; }
+      const nextCollected = !anime.collected;
+      if (!nextCollected && !anime.status) return acc; // 沒有狀態又取消收藏 → 直接移除
+      acc.push({ ...anime, collected: nextCollected });
+      return acc;
+    }, []));
+  };
  
-  const handleRemoveFromList = (animeId) => {
-    setMyPlaylist(prevList => prevList.filter(anime => anime.id !== animeId));
+  // fromCollectTab = true 表示這次移除是從 Collect 分頁按的叉叉：只取消收藏，不影響其他狀態
+  // fromCollectTab = false 表示從 Watching/Planned/Completed 按的叉叉：
+  //   如果該項目仍在收藏中，只清空進度狀態、保留在 Collect 分頁；否則整筆刪除
+  const handleRemoveFromList = (animeId, fromCollectTab = false) => {
+    setMyPlaylist(prevList => prevList.reduce((acc, anime) => {
+      if (anime.id !== animeId) { acc.push(anime); return acc; }
+      if (fromCollectTab) {
+        if (anime.status) acc.push({ ...anime, collected: false });
+        // 沒有進度狀態又取消收藏 → 整筆刪除（不 push）
+      } else {
+        if (anime.collected) acc.push({ ...anime, status: null });
+        // 沒有被收藏 → 整筆刪除（不 push）
+      }
+      return acc;
+    }, []));
     showToast('已從清單中移除。');
   };
  
@@ -581,7 +606,7 @@ export default function App() {
                 Page(page: $page, perPage: 50) {
                   pageInfo { hasNextPage }
                   media(season: $season, seasonYear: $seasonYear, type: ANIME, countryOfOrigin: "JP", sort: POPULARITY_DESC) {
-                    id title { romaji english native } coverImage { extraLarge large } meanScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
+                    id title { romaji english native } coverImage { extraLarge large } averageScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
                   }
                 }
               }
@@ -874,6 +899,7 @@ export default function App() {
           <ProfileView 
             playlist={myPlaylist} onUpdateProgress={handleUpdateProgress}
             onChangeStatus={handleChangeStatus} onRemove={handleRemoveFromList} onOpenModal={handleOpenModal}
+            onToggleCollect={handleToggleCollect}
             theme={theme}
             currentUser={currentUser}
             onShowAuth={() => setShowAuth(true)}
@@ -886,6 +912,7 @@ export default function App() {
           <ProfileView 
             playlist={myPlaylist} onUpdateProgress={handleUpdateProgress}
             onChangeStatus={handleChangeStatus} onRemove={handleRemoveFromList} onOpenModal={handleOpenModal}
+            onToggleCollect={handleToggleCollect}
             theme={theme}
             currentUser={currentUser}
             onShowAuth={() => setShowAuth(true)}
@@ -1671,7 +1698,7 @@ function CatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
             Page(page: $page, perPage: 40) {
               pageInfo { lastPage }
               media(search: $search, format: $format, genre: $genre, status: $status, seasonYear: $seasonYear, startDate_greater: $startDateGreater, startDate_lesser: $startDateLesser, season: $season, type: ANIME, countryOfOrigin: "JP", sort: $sort, isAdult: false) {
-                id title { romaji english native } coverImage { extraLarge large } meanScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
+                id title { romaji english native } coverImage { extraLarge large } averageScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
               }
             }
           }
@@ -1847,9 +1874,9 @@ function CatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
 function MangaCatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
   const FORMATS = [
     { id: 'All', label: 'All' },
-    { id: 'MANGA', label: 'MANGA' },
-    { id: 'NOVEL', label: 'NOVEL' },
-    { id: 'ONE_SHOT', label: 'ONE SHOT' }
+    { id: 'MANGA', label: 'Manga' },
+    { id: 'NOVEL', label: 'Novel' },
+    { id: 'ONE_SHOT', label: 'One Shot' }
   ];
   
   const [activeFormat, setActiveFormat] = useState('All'); 
@@ -1924,7 +1951,7 @@ function MangaCatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }
             Page(page: $page, perPage: 40) {
               pageInfo { lastPage }
               media(search: $search, format: $format, genre: $genre, status: $status, countryOfOrigin: $countryOfOrigin, startDate_greater: $startDateGreater, startDate_lesser: $startDateLesser, type: MANGA, sort: $sort, isAdult: false) {
-                id title { romaji english native } coverImage { extraLarge large } meanScore popularity chapters volumes status format genres season seasonYear description startDate { year month day } isAdult countryOfOrigin
+                id title { romaji english native } coverImage { extraLarge large } averageScore popularity chapters volumes status format genres season seasonYear description startDate { year month day } isAdult countryOfOrigin
               }
             }
           }
@@ -2097,7 +2124,7 @@ function MangaCatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }
   );
 }
 
-function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onOpenModal, theme, currentUser, onShowAuth, onLogout, mediaFilter = 'anime' }) {
+function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onOpenModal, onToggleCollect, theme, currentUser, onShowAuth, onLogout, mediaFilter = 'anime' }) {
   const [activeTab, setActiveTab] = useState(LIST_STATUS.WATCHING);
   const [sortOrder, setSortOrder] = useState('newest'); 
   const [activeFormat, setActiveFormat] = useState('All'); 
@@ -2117,7 +2144,8 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
   const tabs = [
     { id: LIST_STATUS.WATCHING, label: isManga ? 'Reading' : 'Watching' },
     { id: LIST_STATUS.PLANNED, label: isManga ? 'Plan to Read' : 'Plan to Watch' },
-    { id: LIST_STATUS.COMPLETED, label: 'Completed' }
+    { id: LIST_STATUS.COMPLETED, label: 'Completed' },
+    ...(isManga ? [{ id: 'COLLECT', label: 'Collect' }] : [])
   ];
   
   const FORMATS = isManga ? ['All', 'Manga', 'Novel', 'One Shot'] : ['All', 'TV', 'ONA', 'MOVIE'];
@@ -2128,7 +2156,10 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
   }, [activeTab, sortOrder, activeFormat]);
  
   const currentList = scopedPlaylist.filter(item => {
-    if (activeTab === LIST_STATUS.WATCHING) {
+    if (activeTab === 'COLLECT') {
+      // Collect 是獨立於 status 的收藏標記，可以跟任何狀態（包含 Reading）共存
+      return !!item.collected && (activeFormat === 'All' || item.format === activeFormat);
+    } else if (activeTab === LIST_STATUS.WATCHING) {
       return item.status === activeTab;
     } else {
       return item.status === activeTab && (activeFormat === 'All' || item.format === activeFormat);
@@ -2146,7 +2177,7 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
         if (!db) return -1;
         return db.localeCompare(da); // 最新的在前
       });
-    } else if (activeTab === LIST_STATUS.PLANNED || activeTab === LIST_STATUS.COMPLETED) {
+    } else if (activeTab === LIST_STATUS.PLANNED || activeTab === LIST_STATUS.COMPLETED || activeTab === 'COLLECT') {
       list.sort((a, b) => {
         const getScore = (anime) => {
           let year = parseInt(anime.year) || 0;
@@ -2191,8 +2222,7 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
           <div className="w-full max-w-[1600px] mx-auto flex items-center gap-5">
             <AvatarUpload theme={theme} currentUser={currentUser} />
             <div>
-              <h1 className={`text-3xl mb-1 fascinate-regular flex items-center gap-2.5 ${hasBanner ? 'text-white drop-shadow-sm' : (theme === 'dark' ? 'text-white' : 'text-black')}`}>
-                <img src={isManga ? openBookIcon : keyframeIcon} alt={isManga ? 'manga' : 'anime'} className={`w-6 h-6 object-contain shrink-0 transition-all duration-300 ${(theme === 'dark' || hasBanner) ? 'invert' : ''}`} />
+              <h1 className={`text-3xl mb-1 fascinate-regular ${hasBanner ? 'text-white drop-shadow-sm' : (theme === 'dark' ? 'text-white' : 'text-black')}`}>
                 {currentUser ? currentUser + `'s ${isManga ? 'Manga' : 'Anime'} List` : 'My Profile'}
               </h1>
               {currentUser ? (
@@ -2221,7 +2251,7 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
               <button key={tab.id} onClick={() => { setActiveTab(tab.id); setActiveFormat('All'); }} className={`pb-2 text-sm font-bold transition-colors border-none bg-transparent relative shrink-0 ${activeTab === tab.id ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black')}`}>
                 {tab.label}
                 <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-none transition-colors duration-300 ${activeTab === tab.id ? (theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white') : (theme === 'dark' ? 'bg-[#1a1a1a] text-gray-400' : 'bg-gray-100 text-gray-500')}`}>
-                    {activeTab === LIST_STATUS.WATCHING ? scopedPlaylist.filter(i => i.status === tab.id).length : scopedPlaylist.filter(i => i.status === tab.id && (activeFormat === 'All' || i.format === activeFormat)).length}
+                    {tab.id === 'COLLECT' ? scopedPlaylist.filter(i => i.collected).length : (activeTab === LIST_STATUS.WATCHING ? scopedPlaylist.filter(i => i.status === tab.id).length : scopedPlaylist.filter(i => i.status === tab.id && (activeFormat === 'All' || i.format === activeFormat)).length)}
                 </span>
                 {activeTab === tab.id && <div className={`absolute -bottom-2 left-0 w-full h-0.5 transition-colors duration-300 ${theme === 'dark' ? 'bg-white' : 'bg-black'}`}></div>}
               </button>
@@ -2311,7 +2341,16 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
                               <button onClick={() => onChangeStatus(anime.id, LIST_STATUS.COMPLETED)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black'}`}>Completed</button>
                             </>
                           )}
-                          <button onClick={() => onRemove(anime.id)} className={`px-2 py-1.5 rounded-none text-[9px] font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-[#F75C2F]' : 'text-gray-400 hover:text-[#F75C2F]'}`}>Remove</button>
+                          {isManga && (
+                            <button
+                              onClick={() => onToggleCollect(anime.id)}
+                              title={anime.collected ? '取消收藏' : '加入收藏'}
+                              className={`px-2 py-1.5 rounded-none border-none bg-transparent shrink-0 transition-colors flex items-center ${anime.collected ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black')}`}
+                            >
+                              <svg width="11" height="13" viewBox="0 0 24 24" fill={anime.collected ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M9 3a2 2 0 00-2 2v16l5-4 5 4V5a2 2 0 00-2-2H9z"/></svg>
+                            </button>
+                          )}
+                          <button onClick={() => onRemove(anime.id, activeTab === 'COLLECT')} className={`px-2 py-1.5 rounded-none text-[13px] leading-none font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-[#F75C2F]' : 'text-gray-400 hover:text-[#F75C2F]'}`}>✕</button>
                         </div>
                       </div>
                     </div>
