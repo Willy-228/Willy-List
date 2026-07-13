@@ -138,7 +138,7 @@ const formatAnilistAnime = (media) => {
     bDayIndex = 7;
   }
  
-  const formattedScore = media.averageScore ? (media.averageScore / 10).toFixed(1) : 'N/A';
+  const formattedScore = media.meanScore ? (media.meanScore / 10).toFixed(1) : 'N/A';
   
   let mapStatus = 'Unknown';
   if (media.status === 'RELEASING') mapStatus = 'Currently Airing';
@@ -186,7 +186,7 @@ const formatAnilistManga = (media) => {
 
   const isAdultContent = media.isAdult || (media.genres && media.genres.includes('Hentai'));
 
-  const formattedScore = media.averageScore ? (media.averageScore / 10).toFixed(1) : 'N/A';
+  const formattedScore = media.meanScore ? (media.meanScore / 10).toFixed(1) : 'N/A';
 
   let mapStatus = 'Unknown';
   let statusKey = 'Unknown';
@@ -606,7 +606,7 @@ export default function App() {
                 Page(page: $page, perPage: 50) {
                   pageInfo { hasNextPage }
                   media(season: $season, seasonYear: $seasonYear, type: ANIME, countryOfOrigin: "JP", sort: POPULARITY_DESC) {
-                    id title { romaji english native } coverImage { extraLarge large } averageScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
+                    id title { romaji english native } coverImage { extraLarge large } meanScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
                   }
                 }
               }
@@ -1509,7 +1509,8 @@ function AnimeCardHome({ anime, onClick, onAdd, theme, myPlaylist }) {
     ? `${anime.season} ${anime.year}` 
     : (anime.year ? anime.year : (anime.airDateStr ? anime.airDateStr.split('-')[0] : ''));
  
-  const isAlreadyInList = myPlaylist.some(item => item.id === anime.id);
+  const matchedListItem = myPlaylist.find(item => item.id === anime.id);
+  const isAlreadyInList = !!matchedListItem;
  
   return (
     <div className={`flex gap-5 p-3.5 cursor-pointer relative group transition-all hover:shadow-md rounded-2xl border w-full h-full ${theme === 'dark' ? 'bg-[#141414] border-transparent hover:border-[#333]' : 'bg-white border-transparent hover:border-gray-100'}`} onClick={onClick}>
@@ -1549,12 +1550,12 @@ function AnimeCardHome({ anime, onClick, onAdd, theme, myPlaylist }) {
       </div>
  
       {isAlreadyInList ? (
-        <div className={`absolute bottom-3 right-3 w-[34px] h-[34px] text-lg rounded-full opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center font-bold shadow-md border border-transparent leading-none pt-[2px] ${theme === 'dark' ? 'bg-[#222] text-[#dbe6ff]' : 'bg-gray-100 text-[#556376]'}`} title="已在清單中">
-          ✓
+        <div className={`absolute bottom-3 right-3 w-[34px] h-[34px] opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center ${matchedListItem?.collected ? 'text-[#D7C4BB]' : matchedListItem?.status === LIST_STATUS.COMPLETED ? 'text-[#F8C3CD]' : matchedListItem?.status === LIST_STATUS.WATCHING ? (theme === 'dark' ? 'text-[#dbe6ff]' : 'text-[#dfe9ff]') : (theme === 'dark' ? 'text-gray-400' : 'text-gray-300')}`} title="已在清單中">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="square" strokeLinejoin="miter" className="w-4 h-4"><path d="M4 12l6 6L20 6"/></svg>
         </div>
       ) : (
-        <button onClick={(e) => { e.stopPropagation(); onAdd(anime); }} className={`absolute bottom-3 right-3 w-[34px] h-[34px] text-lg rounded-full opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center font-bold hover:scale-110 shadow-md border-none leading-none pb-[2px] ${theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white'}`} title="加入待播清單">
-          +
+        <button onClick={(e) => { e.stopPropagation(); onAdd(anime); }} className={`absolute bottom-3 right-3 w-[34px] h-[34px] opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center hover:scale-110 border-none bg-transparent ${theme === 'dark' ? 'text-white' : 'text-black'}`} title="加入待播清單">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="square" className="w-3.5 h-3.5"><path d="M12 4v16M4 12h16"/></svg>
         </button>
       )}
     </div>
@@ -1566,7 +1567,8 @@ function AnimeCardHorizontal({ anime, onClick, onAdd, theme, myPlaylist }) {
     ? `${anime.season} ${anime.year}` 
     : (anime.year ? anime.year : (anime.airDateStr ? anime.airDateStr.split('-')[0] : ''));
  
-  const isAlreadyInList = myPlaylist.some(item => item.id === anime.id);
+  const matchedListItem = myPlaylist.find(item => item.id === anime.id);
+  const isAlreadyInList = !!matchedListItem;
   const statusColorKey = anime.statusKey || anime.status;
   const epsUnitLabel = anime.isManga ? 'ch' : 'eps';
  
@@ -1608,14 +1610,38 @@ function AnimeCardHorizontal({ anime, onClick, onAdd, theme, myPlaylist }) {
       </div>
  
       {isAlreadyInList ? (
-        <div className={`absolute bottom-3 right-3 w-7 h-7 text-xs rounded-full opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center font-bold shadow-md border border-transparent leading-none pt-[1px] ${theme === 'dark' ? 'bg-[#222] text-[#dbe6ff]' : 'bg-gray-100 text-[#556376]'}`} title="已在清單中">
-          ✓
+        <div className={`absolute bottom-3 right-3 w-7 h-7 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center ${matchedListItem?.collected ? 'text-[#D7C4BB]' : matchedListItem?.status === LIST_STATUS.COMPLETED ? 'text-[#F8C3CD]' : matchedListItem?.status === LIST_STATUS.WATCHING ? (theme === 'dark' ? 'text-[#dbe6ff]' : 'text-[#dfe9ff]') : (theme === 'dark' ? 'text-gray-400' : 'text-gray-300')}`} title="已在清單中">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="square" strokeLinejoin="miter" className="w-3.5 h-3.5"><path d="M4 12l6 6L20 6"/></svg>
         </div>
       ) : (
-        <button onClick={(e) => { e.stopPropagation(); onAdd(anime); }} className={`absolute bottom-3 right-3 w-7 h-7 rounded-full opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center font-bold hover:scale-110 shadow-md border-none leading-none pb-[2px] ${theme === 'dark' ? 'bg-white text-black' : 'bg-black text-white'}`} title="加入待播清單">
-          +
+        <button onClick={(e) => { e.stopPropagation(); onAdd(anime); }} className={`absolute bottom-3 right-3 w-7 h-7 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center hover:scale-110 border-none bg-transparent ${theme === 'dark' ? 'text-white' : 'text-black'}`} title="加入待播清單">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="square" className="w-3 h-3"><path d="M12 4v16M4 12h16"/></svg>
         </button>
       )}
+    </div>
+  );
+}
+ 
+function PaginationBar({ currentPage, totalPages, onPageChange, theme }) {
+  return (
+    <div className="flex items-center justify-center gap-10">
+      <button
+        onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+        disabled={currentPage === 1}
+        className={`w-8 h-8 flex items-center justify-center text-lg border-none bg-transparent transition-opacity disabled:opacity-30 ${theme === 'dark' ? 'text-white' : 'text-black'}`}
+      >
+        ‹
+      </button>
+      <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${theme === 'dark' ? 'bg-gray-400 text-black' : 'bg-gray-300 text-black'}`}>
+        {currentPage}
+      </span>
+      <button
+        onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+        disabled={currentPage === totalPages}
+        className={`w-8 h-8 flex items-center justify-center text-lg border-none bg-transparent transition-opacity disabled:opacity-30 ${theme === 'dark' ? 'text-white' : 'text-black'}`}
+      >
+        ›
+      </button>
     </div>
   );
 }
@@ -1698,7 +1724,7 @@ function CatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
             Page(page: $page, perPage: 40) {
               pageInfo { lastPage }
               media(search: $search, format: $format, genre: $genre, status: $status, seasonYear: $seasonYear, startDate_greater: $startDateGreater, startDate_lesser: $startDateLesser, season: $season, type: ANIME, countryOfOrigin: "JP", sort: $sort, isAdult: false) {
-                id title { romaji english native } coverImage { extraLarge large } averageScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
+                id title { romaji english native } coverImage { extraLarge large } meanScore popularity episodes status format genres season seasonYear description nextAiringEpisode { airingAt episode } startDate { year month day } isAdult
               }
             }
           }
@@ -1827,7 +1853,7 @@ function CatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
               <span className={`text-[10px] font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Sort by</span>
               <button onClick={() => { setActiveSort('SCORE_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'SCORE_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Rated</button>
               <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
-              <button onClick={() => { setActiveSort('POPULARITY_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'POPULARITY_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Trends</button>
+              <button onClick={() => { setActiveSort('POPULARITY_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'POPULARITY_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Popularity</button>
               <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
               <button onClick={() => { setActiveSort('START_DATE_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'START_DATE_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Latest</button>
             </div>
@@ -1857,12 +1883,8 @@ function CatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }) {
               ))}
             </div>
             
-            <div className={`flex justify-center items-center gap-4 pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
-              <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>PREV</button>
-              <span className={`text-sm font-mono font-bold px-4 py-1.5 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
-                {currentPage === totalPages ? `Page ${currentPage} / ${totalPages}` : `Page ${currentPage}`}
-              </span>
-              <button onClick={() => setCurrentPage(p => p + 1)} disabled={!hasNextPage} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>NEXT</button>
+            <div className={`flex justify-center items-center pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
+              <PaginationBar currentPage={currentPage} totalPages={totalPages} onPageChange={(p) => setCurrentPage(p)} theme={theme} />
             </div>
           </>
         )}
@@ -1951,7 +1973,7 @@ function MangaCatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }
             Page(page: $page, perPage: 40) {
               pageInfo { lastPage }
               media(search: $search, format: $format, genre: $genre, status: $status, countryOfOrigin: $countryOfOrigin, startDate_greater: $startDateGreater, startDate_lesser: $startDateLesser, type: MANGA, sort: $sort, isAdult: false) {
-                id title { romaji english native } coverImage { extraLarge large } averageScore popularity chapters volumes status format genres season seasonYear description startDate { year month day } isAdult countryOfOrigin
+                id title { romaji english native } coverImage { extraLarge large } meanScore popularity chapters volumes status format genres season seasonYear description startDate { year month day } isAdult countryOfOrigin
               }
             }
           }
@@ -2080,7 +2102,7 @@ function MangaCatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }
               <span className={`text-[10px] font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Sort by</span>
               <button onClick={() => { setActiveSort('SCORE_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'SCORE_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Rated</button>
               <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
-              <button onClick={() => { setActiveSort('POPULARITY_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'POPULARITY_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Trends</button>
+              <button onClick={() => { setActiveSort('POPULARITY_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'POPULARITY_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Top Popularity</button>
               <span className={theme === 'dark' ? 'text-gray-700' : 'text-gray-200'}>/</span>
               <button onClick={() => { setActiveSort('START_DATE_DESC'); setCurrentPage(1); }} className={`text-xs font-bold transition-colors border-none bg-transparent p-0 ${activeSort === 'START_DATE_DESC' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-600')}`}>Latest</button>
             </div>
@@ -2110,12 +2132,8 @@ function MangaCatalogView({ searchQuery, onAdd, onOpenModal, theme, myPlaylist }
               ))}
             </div>
             
-            <div className={`flex justify-center items-center gap-4 pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
-              <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>PREV</button>
-              <span className={`text-sm font-mono font-bold px-4 py-1.5 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
-                {currentPage === totalPages ? `Page ${currentPage} / ${totalPages}` : `Page ${currentPage}`}
-              </span>
-              <button onClick={() => setCurrentPage(p => p + 1)} disabled={!hasNextPage} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>NEXT</button>
+            <div className={`flex justify-center items-center pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
+              <PaginationBar currentPage={currentPage} totalPages={totalPages} onPageChange={(p) => setCurrentPage(p)} theme={theme} />
             </div>
           </>
         )}
@@ -2326,7 +2344,15 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
                               <span className={theme === 'dark' ? 'text-white' : 'text-black'}>{anime.watched} / {anime.eps || '?'}</span>
                             </div>
                             <div className={`w-full rounded-none h-1.5 mb-4 overflow-hidden transition-colors duration-300 ${theme === 'dark' ? 'bg-[#222]' : 'bg-gray-100'}`}>
-                              <div className={`h-full transition-all ${theme === 'dark' ? 'bg-white' : 'bg-black'}`} style={{ width: `${Math.min(100, (anime.watched / (anime.eps || 12)) * 100)}%` }}></div>
+                              {(() => {
+                                const totalKnown = !!anime.eps;
+                                const fallbackTotal = anime.isManga ? 100 : 12;
+                                // 總集數/話數未知時，分母永遠比目前進度多一，避免進度條被填滿
+                                const effectiveTotal = totalKnown ? anime.eps : Math.max(fallbackTotal, anime.watched + 1);
+                                const rawPercent = (anime.watched / effectiveTotal) * 100;
+                                const cappedPercent = totalKnown ? Math.min(100, rawPercent) : Math.min(95, rawPercent);
+                                return <div className={`h-full transition-all ${theme === 'dark' ? 'bg-white' : 'bg-black'}`} style={{ width: `${cappedPercent}%` }}></div>;
+                              })()}
                             </div>
                           </>
                         )}
@@ -2347,7 +2373,7 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
                               title={anime.collected ? '取消收藏' : '加入收藏'}
                               className={`px-2 py-1.5 rounded-none border-none bg-transparent shrink-0 transition-colors flex items-center ${anime.collected ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black')}`}
                             >
-                              <svg width="11" height="13" viewBox="0 0 24 24" fill={anime.collected ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M9 3a2 2 0 00-2 2v16l5-4 5 4V5a2 2 0 00-2-2H9z"/></svg>
+                              <svg width="11" height="13" viewBox="0 0 24 24" fill={anime.collected ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2"><path strokeLinecap="square" strokeLinejoin="miter" d="M9 3a2 2 0 00-2 2v16l5-4 5 4V5a2 2 0 00-2-2H9z"/></svg>
                             </button>
                           )}
                           <button onClick={() => onRemove(anime.id, activeTab === 'COLLECT')} className={`px-2 py-1.5 rounded-none text-[13px] leading-none font-bold transition-colors border-none bg-transparent shrink-0 ${theme === 'dark' ? 'text-gray-500 hover:text-[#F75C2F]' : 'text-gray-400 hover:text-[#F75C2F]'}`}>✕</button>
@@ -2361,12 +2387,8 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
             
             {/* 分頁按鈕區域 */}
             {totalPages > 1 && (
-              <div className={`flex justify-center items-center gap-4 pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
-                <button onClick={() => setProfilePage(p => Math.max(1, p - 1))} disabled={profilePage === 1} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>PREV</button>
-                <span className={`text-sm font-mono font-bold px-4 py-1.5 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-black'}`}>
-                  Page {profilePage} / {totalPages}
-                </span>
-                <button onClick={() => setProfilePage(p => Math.min(totalPages, p + 1))} disabled={profilePage === totalPages} className={`px-6 py-2 text-sm font-bold transition-all rounded-none border-none ${theme === 'dark' ? 'text-white disabled:text-gray-600 bg-[#1a1a1a] hover:bg-[#333]' : 'text-black disabled:text-gray-300 bg-gray-100 hover:bg-gray-200'}`}>NEXT</button>
+              <div className={`flex justify-center items-center pt-4 border-t mt-8 transition-colors duration-300 ${theme === 'dark' ? 'border-[#222]' : 'border-gray-100'}`}>
+                <PaginationBar currentPage={profilePage} totalPages={totalPages} onPageChange={(p) => setProfilePage(p)} theme={theme} />
               </div>
             )}
           </>
