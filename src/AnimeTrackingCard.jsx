@@ -502,11 +502,11 @@ export default function App() {
   };
 
   // 上移 / 下移一格（direction = -1 或 1）
-  const handleMoveSeries = (seriesId, direction) => {
+  const handleMoveSeries = (seriesId, targetId) => {
     setMySeries(prev => {
       const from = prev.findIndex(sr => sr.id === seriesId);
-      const to = from + direction;
-      if (from === -1 || to < 0 || to >= prev.length) return prev;
+      const to = prev.findIndex(sr => sr.id === targetId);
+      if (from === -1 || to === -1 || from === to) return prev;
       const next = [...prev];
       [next[from], next[to]] = [next[to], next[from]];
       return next;
@@ -2558,6 +2558,16 @@ function SeriesView({ playlist, series, onCreate, onRename, onDelete, onMove, on
 
   const totalItems = series.reduce((sum, sr) => sum + sr.items.length, 0);
 
+  // 只要系列裡有一部「正在看」的動畫，就置頂；置頂組與其餘組各自維持手動順序
+  const watchingIds = new Set(playlist.filter(a => !a.isManga && a.status === LIST_STATUS.WATCHING).map(a => a.id));
+  const isPinned = (sr) => sr.items.some(it => watchingIds.has(it.id));
+  const displaySeries = [...series.filter(isPinned), ...series.filter(sr => !isPinned(sr))];
+  // 拖曳只能在同一組內（置頂 / 非置頂）調整
+  const canDropOn = (target) => {
+    const dragged = series.find(x => x.id === dragId);
+    return !!dragged && dragged.id !== target.id && isPinned(dragged) === isPinned(target);
+  };
+
   return (
     <div className={`h-full overflow-y-auto scrollbar-hide transition-colors duration-300 ${isDark ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
       <BannerUpload theme={theme} currentUser={currentUser}>
@@ -2616,7 +2626,11 @@ function SeriesView({ playlist, series, onCreate, onRename, onDelete, onMove, on
             </div>
           ) : (
             <div className="flex flex-col gap-12">
-              {series.map((sr, srIndex) => {
+              {displaySeries.map((sr, srIndex) => {
+                const prevSr = displaySeries[srIndex - 1];
+                const nextSr = displaySeries[srIndex + 1];
+                const canMoveUp = !!prevSr && isPinned(prevSr) === isPinned(sr);
+                const canMoveDown = !!nextSr && isPinned(nextSr) === isPinned(sr);
                 const isPickerOpen = pickerOpenId === sr.id;
                 const playlistById = new Map(playlist.map(a => [a.id, a]));
                 const sortedItems = [...sr.items].sort((a, b) => {
@@ -2634,9 +2648,9 @@ function SeriesView({ playlist, series, onCreate, onRename, onDelete, onMove, on
                 return (
                   <section
                     key={sr.id}
-                    onDragOver={(e) => { if (dragId && dragId !== sr.id) { e.preventDefault(); setDragOverId(sr.id); } }}
-                    onDrop={(e) => { e.preventDefault(); onReorder(dragId, sr.id); setDragId(null); setDragOverId(null); }}
-                    className={`transition-opacity ${dragId === sr.id ? 'opacity-40' : ''} ${dragOverId === sr.id && dragId && dragId !== sr.id ? `border-t-2 pt-3 ${isDark ? 'border-white' : 'border-black'}` : ''}`}
+                    onDragOver={(e) => { if (dragId && canDropOn(sr)) { e.preventDefault(); setDragOverId(sr.id); } }}
+                    onDrop={(e) => { e.preventDefault(); if (canDropOn(sr)) onReorder(dragId, sr.id); setDragId(null); setDragOverId(null); }}
+                    className={`transition-opacity ${dragId === sr.id ? 'opacity-40' : ''} ${dragOverId === sr.id && dragId && canDropOn(sr) ? `border-t-2 pt-3 ${isDark ? 'border-white' : 'border-black'}` : ''}`}
                   >
                     {/* 系列標題列 */}
                     <div className={`flex items-center justify-between gap-4 mb-5 pb-2 border-b transition-colors duration-300 ${isDark ? 'border-[#1a1a1a]' : 'border-gray-100'}`}>
@@ -2685,18 +2699,18 @@ function SeriesView({ playlist, series, onCreate, onRename, onDelete, onMove, on
 
                       <div className="flex items-center gap-1 shrink-0">
                         <button
-                          onClick={() => onMove(sr.id, -1)}
-                          disabled={srIndex === 0}
+                          onClick={() => onMove(sr.id, prevSr.id)}
+                          disabled={!canMoveUp}
                           title="上移"
-                          className={`px-1.5 py-1.5 text-[11px] border-none bg-transparent transition-colors ${srIndex === 0 ? (isDark ? 'text-gray-800 cursor-not-allowed' : 'text-gray-200 cursor-not-allowed') : `${hoverBtn} cursor-pointer`}`}
+                          className={`px-1.5 py-1.5 text-[11px] border-none bg-transparent transition-colors ${!canMoveUp ? (isDark ? 'text-gray-800 cursor-not-allowed' : 'text-gray-200 cursor-not-allowed') : `${hoverBtn} cursor-pointer`}`}
                         >
                           ▲
                         </button>
                         <button
-                          onClick={() => onMove(sr.id, 1)}
-                          disabled={srIndex === series.length - 1}
+                          onClick={() => onMove(sr.id, nextSr.id)}
+                          disabled={!canMoveDown}
                           title="下移"
-                          className={`px-1.5 py-1.5 text-[11px] border-none bg-transparent transition-colors ${srIndex === series.length - 1 ? (isDark ? 'text-gray-800 cursor-not-allowed' : 'text-gray-200 cursor-not-allowed') : `${hoverBtn} cursor-pointer`}`}
+                          className={`px-1.5 py-1.5 text-[11px] border-none bg-transparent transition-colors ${!canMoveDown ? (isDark ? 'text-gray-800 cursor-not-allowed' : 'text-gray-200 cursor-not-allowed') : `${hoverBtn} cursor-pointer`}`}
                         >
                           ▼
                         </button>
@@ -2765,9 +2779,12 @@ function SeriesView({ playlist, series, onCreate, onRename, onDelete, onMove, on
                           這個系列還沒有動畫，按「+ Add Anime」開始歸類（會依播放時間自動排序）。
                         </div>
                       ) : (
-                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 2xl:grid-cols-12 gap-3">
                           {sortedItems.map(it => {
-                            const isCompleted = playlistById.get(it.id)?.status === LIST_STATUS.COMPLETED;
+                            const watchStatus = playlistById.get(it.id)?.status;
+                            const barColor = watchStatus === LIST_STATUS.COMPLETED
+                              ? '#BDC0BA'
+                              : (watchStatus === LIST_STATUS.WATCHING ? (isDark ? '#dbe6ff' : '#dfe9ff') : null);
                             return (
                             <div key={`series-${sr.id}-${it.id}`} className="group">
                               <div className="relative overflow-hidden rounded-[10px] shadow-sm">
@@ -2777,16 +2794,17 @@ function SeriesView({ playlist, series, onCreate, onRename, onDelete, onMove, on
                                   onClick={() => onOpenModal(playlist.find(p => p.id === it.id) || it, 'ANIME')}
                                   className={`w-full aspect-[2/3] object-cover cursor-pointer hover:scale-[1.02] transition-transform ${isDark ? 'bg-[#222]' : 'bg-gray-100'}`}
                                 />
-                                {isCompleted && (
+                                {barColor && (
                                   <div
-                                    title="已看完"
-                                    className="absolute bottom-0 left-0 w-full h-[3px] bg-[#5BC8F5] pointer-events-none"
+                                    title={watchStatus === LIST_STATUS.COMPLETED ? '已看完' : '正在看'}
+                                    className="absolute bottom-0 left-0 w-full h-[2px] pointer-events-none"
+                                    style={{ backgroundColor: barColor }}
                                   />
                                 )}
                                 <button
                                   onClick={() => onRemoveItem(sr.id, it.id)}
                                   title="從系列移除"
-                                  className="absolute top-1.5 right-1.5 w-4 h-4 p-0 flex items-center justify-center rounded-full border-none bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-[#F75C2F] transition-all cursor-pointer"
+                                  className="absolute top-1 right-1 w-4 h-4 p-0 flex items-center justify-center rounded-full border-none bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-[#F75C2F] transition-all cursor-pointer"
                                 >
                                   <svg width="7" height="7" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="block">
                                     <path d="M1 1l6 6M7 1L1 7" />
@@ -2795,11 +2813,11 @@ function SeriesView({ playlist, series, onCreate, onRename, onDelete, onMove, on
                               </div>
                               <h3
                                 onClick={() => onOpenModal(playlist.find(p => p.id === it.id) || it, 'ANIME')}
-                                className={`mt-2 text-[12px] font-bold truncate cursor-pointer hover:underline ${strong}`}
+                                className={`mt-1.5 text-[11px] font-bold truncate cursor-pointer hover:underline ${strong}`}
                               >
                                 {it.title}
                               </h3>
-                              <p className={`text-[10px] truncate ${muted}`}>
+                              <p className={`text-[9px] truncate ${muted}`}>
                                 {[it.format, it.airDateStr || playlist.find(p => p.id === it.id)?.airDateStr || (it.season && it.year ? `${it.season} ${it.year}` : it.year)].filter(Boolean).join(' · ')}
                               </p>
                             </div>
