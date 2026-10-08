@@ -276,7 +276,7 @@ export default function App() {
   const [currentPage, _setCurrentPage] = useState(() => {
     try {
       const hash = window.location.hash.replace('#', '');
-      return ['home', 'anime', 'manga', 'profile', 'profile-manga', 'calendar'].includes(hash) ? hash : 'home';
+      return ['home', 'anime', 'manga', 'profile', 'profile-manga', 'profile-series', 'calendar'].includes(hash) ? hash : 'home';
     } catch (e) {
       return 'home';
     }
@@ -364,6 +364,16 @@ export default function App() {
     } catch { return []; }
   });
  
+  // ── Series（系列）：每個帳號各自儲存 ─────────────────────────────────
+  const [mySeries, setMySeries] = useState(() => {
+    try {
+      const user = localStorage.getItem('app-current-user');
+      if (!user) return [];
+      const saved = localStorage.getItem(`animeSeries-${user}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalData, setModalData] = useState(null);
   const [isModalLoading, setIsModalLoading] = useState(false);
@@ -380,13 +390,13 @@ export default function App() {
       try {
         setIsModalOpen(false); 
         if (e.state && e.state.page) {
-          if (['home', 'anime', 'manga', 'profile', 'profile-manga', 'calendar'].includes(e.state.page)) {
+          if (['home', 'anime', 'manga', 'profile', 'profile-manga', 'profile-series', 'calendar'].includes(e.state.page)) {
             _setCurrentPage(e.state.page);
             return;
           }
         }
         const hash = window.location.hash.replace('#', '');
-        if (['home', 'anime', 'manga', 'profile', 'profile-manga', 'calendar'].includes(hash)) {
+        if (['home', 'anime', 'manga', 'profile', 'profile-manga', 'profile-series', 'calendar'].includes(hash)) {
           _setCurrentPage(hash);
         }
       } catch (error) {}
@@ -403,6 +413,14 @@ export default function App() {
       } catch {}
     }
   }, [myPlaylist, currentUser]);
+
+  useEffect(() => {
+    if (currentUser) {
+      try {
+        localStorage.setItem(`animeSeries-${currentUser}`, JSON.stringify(mySeries));
+      } catch {}
+    }
+  }, [mySeries, currentUser]);
  
   // ── 帳號操作 ──────────────────────────────────────────────────────────
   const handleLogin = (username, password) => {
@@ -426,6 +444,8 @@ export default function App() {
       localStorage.setItem('app-current-user', username);
       const saved = localStorage.getItem(`animePlaylist-${username}`);
       setMyPlaylist(saved ? JSON.parse(saved) : []);
+      const savedSeries = localStorage.getItem(`animeSeries-${username}`);
+      setMySeries(savedSeries ? JSON.parse(savedSeries) : []);
     } catch {}
     setCurrentUser(username);
     setShowAuth(false);
@@ -436,11 +456,79 @@ export default function App() {
     try { localStorage.removeItem('app-current-user'); } catch {}
     setCurrentUser(null);
     setMyPlaylist([]);
+    setMySeries([]);
   };
 
   const showToast = (message) => {
     setToast(message);
     setTimeout(() => setToast(null), 3000);
+  };
+
+  // ── Series 操作 ───────────────────────────────────────────────────────
+  const handleCreateSeries = (name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return false;
+    if (mySeries.some(sr => sr.name.toLowerCase() === trimmed.toLowerCase())) {
+      showToast(`系列《${trimmed}》已經存在了。`);
+      return false;
+    }
+    setMySeries(prev => [...prev, { id: `series-${Date.now()}`, name: trimmed, items: [] }]);
+    showToast(`已新增系列《${trimmed}》！`);
+    return true;
+  };
+
+  const handleRenameSeries = (seriesId, newName) => {
+    const trimmed = (newName || '').trim();
+    if (!trimmed) return;
+    setMySeries(prev => prev.map(sr => sr.id === seriesId ? { ...sr, name: trimmed } : sr));
+  };
+
+  const handleDeleteSeries = (seriesId) => {
+    setMySeries(prev => prev.filter(sr => sr.id !== seriesId));
+    showToast('已刪除系列。');
+  };
+
+  // 存「快照」而不是只存 id：就算之後把動畫從 Profile 清單移除，系列裡仍會保留
+  const handleAddToSeries = (seriesId, anime) => {
+    const snapshot = {
+      id: anime.id, title: anime.title, imageUrl: anime.imageUrl,
+      format: anime.format, year: anime.year, season: anime.season, score: anime.score,
+      airDateStr: anime.airDateStr || '',
+    };
+    setMySeries(prev => prev.map(sr => {
+      if (sr.id !== seriesId || sr.items.some(it => it.id === anime.id)) return sr;
+      return { ...sr, items: [...sr.items, snapshot] };
+    }));
+  };
+
+  // 上移 / 下移一格（direction = -1 或 1）
+  const handleMoveSeries = (seriesId, direction) => {
+    setMySeries(prev => {
+      const from = prev.findIndex(sr => sr.id === seriesId);
+      const to = from + direction;
+      if (from === -1 || to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      [next[from], next[to]] = [next[to], next[from]];
+      return next;
+    });
+  };
+
+  // 拖曳排序：把 fromId 移到 toId 目前的位置
+  const handleReorderSeries = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId) return;
+    setMySeries(prev => {
+      const from = prev.findIndex(sr => sr.id === fromId);
+      const to = prev.findIndex(sr => sr.id === toId);
+      if (from === -1 || to === -1) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+
+  const handleRemoveFromSeries = (seriesId, animeId) => {
+    setMySeries(prev => prev.map(sr => sr.id === seriesId ? { ...sr, items: sr.items.filter(it => it.id !== animeId) } : sr));
   };
  
   const handleAddToList = (anime, status = LIST_STATUS.PLANNED) => {
@@ -788,6 +876,13 @@ export default function App() {
                     <img src={openBookIcon} alt="manga" className={`w-3 h-3 object-contain transition-all duration-300 ${theme === 'dark' ? 'invert' : ''}`} />
                     Manga
                   </button>
+                  <button
+                    onClick={() => { if (!currentUser) setShowAuth(true); else setCurrentPage('profile-series'); }}
+                    className={`w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-left transition-colors border-none bg-transparent whitespace-nowrap ${currentPage === 'profile-series' ? (theme === 'dark' ? 'text-white' : 'text-black') : (theme === 'dark' ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-black')}`}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="square" d="M4 6h16M4 12h16M4 18h10" /></svg>
+                    Series
+                  </button>
                 </div>
               </div>
             </div>
@@ -921,6 +1016,25 @@ export default function App() {
           />
         )}
  
+        {currentPage === 'profile-series' && (
+          <SeriesView
+            playlist={myPlaylist}
+            series={mySeries}
+            onCreate={handleCreateSeries}
+            onRename={handleRenameSeries}
+            onDelete={handleDeleteSeries}
+            onMove={handleMoveSeries}
+            onReorder={handleReorderSeries}
+            onAddItem={handleAddToSeries}
+            onRemoveItem={handleRemoveFromSeries}
+            onOpenModal={handleOpenModal}
+            theme={theme}
+            currentUser={currentUser}
+            onShowAuth={() => setShowAuth(true)}
+            onLogout={handleLogout}
+          />
+        )}
+
         {currentPage === 'calendar' && (
           <CalendarView
             myPlaylist={myPlaylist}
@@ -1632,7 +1746,7 @@ function PaginationBar({ currentPage, totalPages, onPageChange, theme }) {
       >
         ‹
       </button>
-      <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${theme === 'dark' ? 'bg-gray-400 text-black' : 'bg-gray-300 text-black'}`}>
+      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${theme === 'dark' ? 'bg-gray-400 text-black' : 'bg-gray-300 text-black'}`}>
         {currentPage}
       </span>
       <button
@@ -2399,6 +2513,312 @@ function ProfileView({ playlist, onUpdateProgress, onChangeStatus, onRemove, onO
   );
 }
  
+// ── Series 頁面：自訂動畫系列，把同一部作品的各季 / 劇場版放在同一區 ──────────
+const SEASON_START_MONTH = { winter: 1, spring: 4, summer: 7, fall: 10, autumn: 10 };
+
+// 回傳可比較的播放日期數字（YYYYMMDD）；沒有日期的排最後
+const getAirSortValue = (item, fallbackItem) => {
+  const dateStr = item.airDateStr || fallbackItem?.airDateStr || '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
+  if (m) return Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]);
+  const year = Number(item.year || fallbackItem?.year);
+  if (year) {
+    const month = SEASON_START_MONTH[String(item.season || fallbackItem?.season || '').toLowerCase()] || 1;
+    return year * 10000 + month * 100 + 1;
+  }
+  return Infinity;
+};
+
+function SeriesView({ playlist, series, onCreate, onRename, onDelete, onMove, onReorder, onAddItem, onRemoveItem, onOpenModal, theme, currentUser, onShowAuth, onLogout }) {
+  const [dragId, setDragId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+  const [newName, setNewName] = useState('');
+  const [pickerOpenId, setPickerOpenId] = useState(null);
+  const [pickerQuery, setPickerQuery] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState('');
+  const [collapsed, setCollapsed] = useState({});
+
+  const isDark = theme === 'dark';
+  const muted = isDark ? 'text-gray-500' : 'text-gray-400';
+  const strong = isDark ? 'text-white' : 'text-black';
+  const hoverBtn = isDark ? 'text-gray-500 hover:text-white' : 'text-gray-400 hover:text-black';
+
+  // 只列出動畫（不含漫畫）
+  const animeOnly = useMemo(() => playlist.filter(item => !item.isManga), [playlist]);
+
+  const submitNew = () => {
+    if (onCreate(newName)) setNewName('');
+  };
+
+  const commitRename = (id) => {
+    onRename(id, editingName);
+    setEditingId(null);
+  };
+
+  const totalItems = series.reduce((sum, sr) => sum + sr.items.length, 0);
+
+  return (
+    <div className={`h-full overflow-y-auto scrollbar-hide transition-colors duration-300 ${isDark ? 'bg-[#0a0a0a]' : 'bg-white'}`}>
+      <BannerUpload theme={theme} currentUser={currentUser}>
+        {(hasBanner) => (
+        <div className="h-full flex items-center px-6 lg:px-16">
+          <div className="w-full max-w-[1600px] mx-auto flex items-center gap-5">
+            <AvatarUpload theme={theme} currentUser={currentUser} />
+            <div>
+              <h1 className={`text-3xl mb-1 fascinate-regular ${hasBanner ? 'text-white drop-shadow-sm' : strong}`}>
+                {currentUser ? currentUser + "'s Series" : 'My Profile'}
+              </h1>
+              {currentUser ? (
+                <div className="flex items-center gap-4">
+                  <p className={`text-[11px] ${hasBanner ? 'text-white/70' : muted}`}>
+                    Series: {series.length} | Anime: {totalItems}
+                  </p>
+                  <button onClick={onLogout} className={`text-[11px] font-bold border-none bg-transparent p-0 cursor-pointer transition-colors ${hasBanner ? 'text-white/50 hover:text-white' : (isDark ? 'text-gray-600 hover:text-white' : 'text-gray-300 hover:text-black')}`}>Sign Out</button>
+                </div>
+              ) : (
+                <p className={`text-sm transition-colors duration-300 ${hasBanner ? 'text-white/70' : muted}`}>
+                  <button onClick={onShowAuth} className={`font-bold underline border-none bg-transparent p-0 cursor-pointer ${hasBanner ? 'text-white' : strong}`}>登入 / 註冊</button> 以儲存你的系列
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+        )}
+      </BannerUpload>
+
+      <div className="px-6 lg:px-16 py-10 pb-24">
+        <div className="max-w-[1600px] mx-auto">
+
+          {/* 新增系列 */}
+          <div className={`flex items-center gap-4 mb-10 border-b pb-4 transition-colors duration-300 ${isDark ? 'border-[#1a1a1a]' : 'border-gray-50'}`}>
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitNew(); }}
+              placeholder="新增系列名稱，例如：鬼滅之刃、進擊的巨人…"
+              className={`flex-1 max-w-[420px] text-sm py-1.5 rounded-none focus:outline-none transition-colors bg-transparent border-0 border-b ${isDark ? 'text-white placeholder-gray-600 border-gray-600 focus:border-white' : 'text-black placeholder-gray-400 border-gray-300 focus:border-black'}`}
+              style={{ borderBottomWidth: '1px' }}
+            />
+            <button
+              onClick={submitNew}
+              disabled={!newName.trim()}
+              className={`px-4 py-1.5 text-xs font-bold rounded-none border-none transition-colors ${newName.trim() ? (isDark ? 'bg-white text-black hover:bg-gray-200' : 'bg-black text-white hover:bg-gray-800') : (isDark ? 'bg-[#1a1a1a] text-gray-600' : 'bg-gray-100 text-gray-300')} ${newName.trim() ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+            >
+              + 新增系列
+            </button>
+          </div>
+
+          {series.length === 0 ? (
+            <div className={`text-center py-24 border border-dashed text-sm font-mono rounded-none transition-colors duration-300 ${isDark ? 'bg-[#111] border-[#222] text-gray-500' : 'bg-gray-50 border-gray-100 text-gray-400'}`}>
+              還沒有任何系列，先在上面建立一個吧。
+            </div>
+          ) : (
+            <div className="flex flex-col gap-12">
+              {series.map((sr, srIndex) => {
+                const isPickerOpen = pickerOpenId === sr.id;
+                const playlistById = new Map(playlist.map(a => [a.id, a]));
+                const sortedItems = [...sr.items].sort((a, b) => {
+                  const diff = getAirSortValue(a, playlistById.get(a.id)) - getAirSortValue(b, playlistById.get(b.id));
+                  if (diff !== 0 && !Number.isNaN(diff)) return diff;
+                  return String(a.id).localeCompare(String(b.id));
+                });
+                const isCollapsed = !!collapsed[sr.id];
+                const inSeriesIds = new Set(sr.items.map(it => it.id));
+                const candidates = animeOnly.filter(a =>
+                  !inSeriesIds.has(a.id) &&
+                  (!pickerQuery.trim() || (a.title || '').toLowerCase().includes(pickerQuery.trim().toLowerCase()))
+                );
+
+                return (
+                  <section
+                    key={sr.id}
+                    onDragOver={(e) => { if (dragId && dragId !== sr.id) { e.preventDefault(); setDragOverId(sr.id); } }}
+                    onDrop={(e) => { e.preventDefault(); onReorder(dragId, sr.id); setDragId(null); setDragOverId(null); }}
+                    className={`transition-opacity ${dragId === sr.id ? 'opacity-40' : ''} ${dragOverId === sr.id && dragId && dragId !== sr.id ? `border-t-2 pt-3 ${isDark ? 'border-white' : 'border-black'}` : ''}`}
+                  >
+                    {/* 系列標題列 */}
+                    <div className={`flex items-center justify-between gap-4 mb-5 pb-2 border-b transition-colors duration-300 ${isDark ? 'border-[#1a1a1a]' : 'border-gray-100'}`}>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span
+                          draggable
+                          onDragStart={(e) => { setDragId(sr.id); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', sr.id); } catch {} }}
+                          onDragEnd={() => { setDragId(null); setDragOverId(null); }}
+                          title="拖曳可調整系列順序"
+                          className={`cursor-grab active:cursor-grabbing select-none text-[13px] leading-none tracking-tighter ${muted}`}
+                        >
+                          ⋮⋮
+                        </span>
+                        <button
+                          onClick={() => setCollapsed(prev => ({ ...prev, [sr.id]: !prev[sr.id] }))}
+                          className={`border-none bg-transparent p-0 text-[10px] cursor-pointer transition-colors ${hoverBtn}`}
+                          title={isCollapsed ? '展開' : '收合'}
+                        >
+                          {isCollapsed ? '▶' : '▼'}
+                        </button>
+
+                        {editingId === sr.id ? (
+                          <input
+                            autoFocus
+                            value={editingName}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            onBlur={() => commitRename(sr.id)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') commitRename(sr.id); if (e.key === 'Escape') setEditingId(null); }}
+                            className={`text-lg font-bold bg-transparent border-0 border-b focus:outline-none rounded-none ${isDark ? 'text-white border-white' : 'text-black border-black'}`}
+                            style={{ borderBottomWidth: '1px' }}
+                          />
+                        ) : (
+                          <h2
+                            onDoubleClick={() => { setEditingId(sr.id); setEditingName(sr.name); }}
+                            title="雙擊可重新命名"
+                            className={`text-lg font-bold truncate ${strong}`}
+                          >
+                            {sr.name}
+                          </h2>
+                        )}
+
+                        <span className={`text-[10px] px-2 py-0.5 rounded-none shrink-0 ${isDark ? 'bg-[#1a1a1a] text-gray-400' : 'bg-gray-100 text-gray-500'}`}>
+                          {sr.items.length}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => onMove(sr.id, -1)}
+                          disabled={srIndex === 0}
+                          title="上移"
+                          className={`px-1.5 py-1.5 text-[11px] border-none bg-transparent transition-colors ${srIndex === 0 ? (isDark ? 'text-gray-800 cursor-not-allowed' : 'text-gray-200 cursor-not-allowed') : `${hoverBtn} cursor-pointer`}`}
+                        >
+                          ▲
+                        </button>
+                        <button
+                          onClick={() => onMove(sr.id, 1)}
+                          disabled={srIndex === series.length - 1}
+                          title="下移"
+                          className={`px-1.5 py-1.5 text-[11px] border-none bg-transparent transition-colors ${srIndex === series.length - 1 ? (isDark ? 'text-gray-800 cursor-not-allowed' : 'text-gray-200 cursor-not-allowed') : `${hoverBtn} cursor-pointer`}`}
+                        >
+                          ▼
+                        </button>
+                        <button
+                          onClick={() => { setPickerOpenId(isPickerOpen ? null : sr.id); setPickerQuery(''); setCollapsed(prev => ({ ...prev, [sr.id]: false })); }}
+                          className={`px-2 py-1.5 text-[11px] font-bold border-none bg-transparent cursor-pointer transition-colors ${isPickerOpen ? strong : hoverBtn}`}
+                        >
+                          {isPickerOpen ? '完成' : '+ Add Anime'}
+                        </button>
+                        <button
+                          onClick={() => { setEditingId(sr.id); setEditingName(sr.name); }}
+                          className={`px-2 py-1.5 text-[11px] font-bold border-none bg-transparent cursor-pointer transition-colors ${hoverBtn}`}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          onClick={() => { if (window.confirm(`確定要刪除系列「${sr.name}」嗎？（不會刪除你的 Profile 清單）`)) onDelete(sr.id); }}
+                          className={`px-2 py-1.5 text-[13px] leading-none font-bold border-none bg-transparent cursor-pointer transition-colors ${isDark ? 'text-gray-500 hover:text-[#F75C2F]' : 'text-gray-400 hover:text-[#F75C2F]'}`}
+                          title="刪除系列"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 加入動畫面板：從 My Profile 的動畫清單挑 */}
+                    {isPickerOpen && (
+                      <div className={`mb-6 p-4 border rounded-2xl transition-colors duration-300 ${isDark ? 'bg-[#141414] border-[#222]' : 'bg-gray-50 border-gray-100'}`}>
+                        <input
+                          type="text"
+                          value={pickerQuery}
+                          onChange={(e) => setPickerQuery(e.target.value)}
+                          placeholder="搜尋你的動畫清單…"
+                          className={`w-full max-w-[320px] text-sm py-1 mb-4 rounded-none focus:outline-none bg-transparent border-0 border-b ${isDark ? 'text-white placeholder-gray-600 border-gray-600 focus:border-white' : 'text-black placeholder-gray-400 border-gray-300 focus:border-black'}`}
+                          style={{ borderBottomWidth: '1px' }}
+                        />
+                        {animeOnly.length === 0 ? (
+                          <p className={`text-xs ${muted}`}>你的動畫清單還是空的，先到 Anime 頁面把作品加入清單，就能在這裡歸類。</p>
+                        ) : candidates.length === 0 ? (
+                          <p className={`text-xs ${muted}`}>沒有可以加入的動畫了。</p>
+                        ) : (
+                          <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 lg:grid-cols-10 gap-3 max-h-[320px] overflow-y-auto scrollbar-hide">
+                            {candidates.map(a => (
+                              <button
+                                key={`pick-${sr.id}-${a.id}`}
+                                onClick={() => onAddItem(sr.id, a)}
+                                title={a.title}
+                                className="group/pick text-left border-none bg-transparent p-0 cursor-pointer"
+                              >
+                                <div className="relative">
+                                  <img src={a.imageUrl} alt="poster" className={`w-full aspect-[2/3] object-cover rounded-[8px] transition-opacity group-hover/pick:opacity-60 ${isDark ? 'bg-[#222]' : 'bg-gray-200'}`} />
+                                  <span className="absolute inset-0 flex items-center justify-center text-white text-2xl font-bold opacity-0 group-hover/pick:opacity-100 transition-opacity drop-shadow">+</span>
+                                </div>
+                                <p className={`mt-1 text-[10px] font-bold truncate ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>{a.title}</p>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 系列內容 */}
+                    {!isCollapsed && (
+                      sr.items.length === 0 ? (
+                        <div className={`py-10 text-center border border-dashed text-xs font-mono rounded-none ${isDark ? 'bg-[#111] border-[#222] text-gray-600' : 'bg-gray-50 border-gray-100 text-gray-400'}`}>
+                          這個系列還沒有動畫，按「+ Add Anime」開始歸類（會依播放時間自動排序）。
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
+                          {sortedItems.map(it => {
+                            const isCompleted = playlistById.get(it.id)?.status === LIST_STATUS.COMPLETED;
+                            return (
+                            <div key={`series-${sr.id}-${it.id}`} className="group">
+                              <div className="relative overflow-hidden rounded-[10px] shadow-sm">
+                                <img
+                                  src={it.imageUrl}
+                                  alt="poster"
+                                  onClick={() => onOpenModal(playlist.find(p => p.id === it.id) || it, 'ANIME')}
+                                  className={`w-full aspect-[2/3] object-cover cursor-pointer hover:scale-[1.02] transition-transform ${isDark ? 'bg-[#222]' : 'bg-gray-100'}`}
+                                />
+                                {isCompleted && (
+                                  <div
+                                    title="已看完"
+                                    className="absolute bottom-0 left-0 w-full h-[3px] bg-[#5BC8F5] pointer-events-none"
+                                  />
+                                )}
+                                <button
+                                  onClick={() => onRemoveItem(sr.id, it.id)}
+                                  title="從系列移除"
+                                  className="absolute top-1.5 right-1.5 w-4 h-4 p-0 flex items-center justify-center rounded-full border-none bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-[#F75C2F] transition-all cursor-pointer"
+                                >
+                                  <svg width="7" height="7" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="block">
+                                    <path d="M1 1l6 6M7 1L1 7" />
+                                  </svg>
+                                </button>
+                              </div>
+                              <h3
+                                onClick={() => onOpenModal(playlist.find(p => p.id === it.id) || it, 'ANIME')}
+                                className={`mt-2 text-[12px] font-bold truncate cursor-pointer hover:underline ${strong}`}
+                              >
+                                {it.title}
+                              </h3>
+                              <p className={`text-[10px] truncate ${muted}`}>
+                                {[it.format, it.airDateStr || playlist.find(p => p.id === it.id)?.airDateStr || (it.season && it.year ? `${it.season} ${it.year}` : it.year)].filter(Boolean).join(' · ')}
+                              </p>
+                            </div>
+                          );
+                          })}
+                        </div>
+                      )
+                    )}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BannerUpload({ theme, currentUser, children }) {
   const storageKey = currentUser ? `banner-${currentUser}` : null;
   const posKey = currentUser ? `banner-pos-${currentUser}` : null;
